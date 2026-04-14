@@ -110,3 +110,150 @@ h2 {
   border: 2px dashed rgba(220, 252, 231, 0.7);
   background: rgba(6, 46, 22, 0.45);
 }
+
+.poker-table {
+  max-width: 980px;
+  aspect-ratio: auto;
+  min-height: min(680px, 86vh);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.table-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+}
+
+.table-header h1,
+.table-header p,
+.seat h2,
+.seat p,
+.user-seat h2,
+.user-seat p {
+  margin: 0;
+}
+
+.opponents-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.9rem;
+}
+
+.seat,
+.user-seat {
+  background: rgba(3, 24, 12, 0.45);
+  border: 1px solid rgba(187, 247, 208, 0.35);
+  border-radius: 12px;
+  padding: 0.8rem;
+}
+
+.hole-cards,
+.board-cards {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-top: 0.55rem;
+}
+
+.cards-with-chips {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.7rem;
+}
+
+.chip-tag {
+  margin: 0;
+  white-space: nowrap;
+  font-weight: 700;
+  color: #bbf7d0;
+}
+
+.playing-card {
+  width: 56px;
+  height: 78px;
+  border-radius: 8px;
+  border: 1px solid #cbd5e1;
+  background: #f8fafc;
+  color: #0f172a;
+  display: grid;
+  place-items: center;
+  font-weight: 700;
+  font-size: 0.85rem;
+}
+
+.playing-card.back {
+  border-color: #60a5fa;
+  background: linear-gradient(145deg, #0f172a 0%, #1e3a8a 100%);
+  color: #dbeafe;
+}
+
+.playing-card.board {
+  border-color: #facc15;
+  background: #fef9c3;
+}
+
+.user-seat {
+  margin-top: auto;
+}
+
+.action-row {
+  margin-top: 0.8rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+}
+
+.poker-action {
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 0.55rem 0.8rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.poker-action:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.poker-action.fold {
+  background: #7f1d1d;
+  color: #fee2e2;
+}
+
+.poker-action.call {
+  background: #1d4ed8;
+  color: #dbeafe;
+}
+
+.poker-action.raise {
+  background: #92400e;
+  color: #ffedd5;
+}
+
+.poker-action.new-hand {
+  margin-top: 0.35rem;
+  background: #14532d;
+  color: #dcfce7;
+}
+
+.status-note {
+  margin: 0.65rem 0 0;
+  color: #dcfce7;
+}
+
+@media (max-width: 760px) {
+  .opponents-row {
+    grid-template-columns: 1fr;
+  }
+
+  .playing-card {
+    width: 50px;
+    height: 72px;
+  }
+}
