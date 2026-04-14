@@ -174,6 +174,8 @@ h2 {
 }
 
 .playing-card {
+  position: relative;
+  overflow: hidden;
   width: 56px;
   height: 78px;
   border-radius: 8px;
@@ -184,6 +186,18 @@ h2 {
   place-items: center;
   font-weight: 700;
   font-size: 0.85rem;
+}
+
+.playing-card.image-card {
+  padding: 0;
+  background: #ffffff;
+}
+
+.card-image {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
 }
 
 .playing-card.back {

@@ -234,6 +234,49 @@ function clonePlayers(players) {
   return players.map((player) => ({ ...player, cards: [...player.cards] }));
 }
 
+function cardAssetName(card) {
+  const [rank, suit] = card.split("-");
+  const rankMap = {
+    A: "ace",
+    K: "king",
+    Q: "queen",
+    J: "jack"
+  };
+  const suitMap = {
+    H: "hearts",
+    D: "diamonds",
+    C: "clubs",
+    S: "spades"
+  };
+
+  const rankName = rankMap[rank] || rank;
+  const suitName = suitMap[suit] || suit;
+  return `${rankName}_of_${suitName}`;
+}
+
+function PokerCard({ card, hidden = false, variant = "" }) {
+  const [imageMissing, setImageMissing] = useState(false);
+  const assetName = hidden ? "back" : cardAssetName(card);
+  const src = `/cards/${assetName}.png`;
+  const fallbackText = hidden ? "?" : card;
+  const classes = ["playing-card", variant].filter(Boolean).join(" ");
+
+  if (imageMissing) {
+    return <span className={classes}>{fallbackText}</span>;
+  }
+
+  return (
+    <span className={`${classes} image-card`}>
+      <img
+        className="card-image"
+        src={src}
+        alt={hidden ? "Hidden card" : `Playing card ${card}`}
+        onError={() => setImageMissing(true)}
+      />
+    </span>
+  );
+}
+
 export default function IngamePage() {
   const [players, setPlayers] = useState(() => {
     const { nextPlayers } = dealHand(initialPlayers());
@@ -475,14 +518,12 @@ export default function IngamePage() {
                 <div className="hole-cards hidden-cards" aria-label="Hidden cards">
                   {street === "showdown" && !opponent.folded ? (
                     opponent.cards.map((card, index) => (
-                      <span className="playing-card" key={`${opponent.id}-${card}-${index}`}>
-                        {card}
-                      </span>
+                      <PokerCard card={card} key={`${opponent.id}-${card}-${index}`} />
                     ))
                   ) : (
                     <>
-                      <span className="playing-card back">?</span>
-                      <span className="playing-card back">?</span>
+                      <PokerCard card="X-X" hidden variant="back" />
+                      <PokerCard card="X-X" hidden variant="back" />
                     </>
                   )}
                 </div>
@@ -498,9 +539,7 @@ export default function IngamePage() {
 
         <div className="board-cards" aria-label="Board cards">
           {visibleBoard.map((card, index) => (
-            <span className="playing-card board" key={`${card}-${index}`}>
-              {card}
-            </span>
+            <PokerCard card={card} variant="board" key={`${card}-${index}`} />
           ))}
         </div>
 
@@ -509,9 +548,7 @@ export default function IngamePage() {
           <div className="cards-with-chips">
             <div className="hole-cards">
               {you.cards.map((card, index) => (
-                <span className="playing-card" key={`${card}-${index}`}>
-                  {card}
-                </span>
+                <PokerCard card={card} key={`${card}-${index}`} />
               ))}
             </div>
             <p className="chip-tag">Chips: {you.chips}</p>
