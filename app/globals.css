@@ -1,7 +1,7 @@
 :root {
   font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
-  color: #1f2937;
-  background: #f8fafc;
+  color: #e5e7eb;
+  background: #0b1220;
 }
 
 * {
@@ -11,6 +11,11 @@
 body {
   margin: 0;
   min-height: 100vh;
+  color: #e5e7eb;
+  background:
+    radial-gradient(circle at 20% 0%, #1a2440 0%, transparent 45%),
+    radial-gradient(circle at 90% 100%, #1f2a44 0%, transparent 35%),
+    #0b1220;
 }
 
 .container {
@@ -22,9 +27,9 @@ body {
 .card {
   margin-top: 1.5rem;
   padding: 1rem 1.25rem;
-  border: 1px solid #d1d5db;
+  border: 1px solid #334155;
   border-radius: 10px;
-  background: #ffffff;
+  background: #111827;
 }
 
 .card-link {
@@ -37,13 +42,13 @@ body {
 .card-link:hover,
 .card-link:focus-visible {
   transform: translateY(-2px);
-  box-shadow: 0 8px 18px rgba(31, 41, 55, 0.12);
+  box-shadow: 0 10px 24px rgba(2, 6, 23, 0.45);
 }
 
 .back-link {
   display: inline-block;
   margin-top: 1rem;
-  color: #0f4ba8;
+  color: #60a5fa;
   text-decoration: none;
   font-weight: 600;
 }
@@ -56,4 +61,52 @@ body {
 h1,
 h2 {
   margin: 0 0 0.75rem;
+}
+
+.ingame-page {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 2rem 1rem;
+}
+
+.ingame-back-link {
+  position: fixed;
+  top: 1rem;
+  left: 1rem;
+  z-index: 10;
+  display: inline-block;
+  padding: 0.6rem 0.9rem;
+  border-radius: 8px;
+  border: 1px solid #334155;
+  background: rgba(15, 23, 42, 0.85);
+  color: #93c5fd;
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.ingame-back-link:hover,
+.ingame-back-link:focus-visible {
+  background: rgba(30, 41, 59, 0.95);
+  text-decoration: none;
+}
+
+.green-box {
+  width: min(720px, 92vw);
+  aspect-ratio: 16 / 9;
+  border-radius: 16px;
+  border: 1px solid #14532d;
+  background: linear-gradient(135deg, #14532d 0%, #166534 50%, #14532d 100%);
+  box-shadow: 0 20px 45px rgba(0, 0, 0, 0.45);
+  display: grid;
+  place-items: center;
+  padding: 1.25rem;
+}
+
+.green-box-inner {
+  width: min(320px, 70%);
+  height: min(180px, 55%);
+  border-radius: 12px;
+  border: 2px dashed rgba(220, 252, 231, 0.7);
+  background: rgba(6, 46, 22, 0.45);
 }
