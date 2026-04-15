@@ -11,6 +11,11 @@ export default function HomePage() {
         <p>Click this card to open another page in the app.</p>
       </Link>
 
+      <Link href="/toy-poker" className="card card-link">
+        <h2>Play Toy Poker</h2>
+        <p>Fast-paced poker with lower stakes and smaller tables.</p>
+      </Link>
+
       <section className="card">
         <h2>API Endpoints</h2>
         <ul>

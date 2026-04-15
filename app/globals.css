@@ -222,6 +222,76 @@ h2 {
   gap: 0.65rem;
 }
 
+.hand-textbox {
+  margin-top: 0.75rem;
+  padding: 0.55rem 0.7rem;
+  border-radius: 8px;
+  border: 1px solid rgba(253, 224, 71, 0.5);
+  background: rgba(120, 53, 15, 0.35);
+  color: #fde68a;
+  font-weight: 700;
+}
+
+.raise-panel {
+  margin-top: 0.75rem;
+  padding: 0.75rem;
+  border-radius: 10px;
+  border: 1px solid rgba(191, 219, 254, 0.55);
+  background: rgba(15, 23, 42, 0.6);
+}
+
+.raise-value {
+  margin: 0;
+  font-weight: 700;
+  color: #dbeafe;
+}
+
+.raise-presets {
+  margin-top: 0.65rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+}
+
+.raise-input-wrap {
+  margin-top: 0.65rem;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  color: #bfdbfe;
+  font-weight: 600;
+}
+
+.raise-chip-input {
+  width: 140px;
+  border-radius: 7px;
+  border: 1px solid rgba(191, 219, 254, 0.55);
+  background: rgba(15, 23, 42, 0.8);
+  color: #e2e8f0;
+  padding: 0.35rem 0.5rem;
+}
+
+.raise-slider {
+  width: 100%;
+  margin-top: 0.65rem;
+}
+
+.raise-meta {
+  margin-top: 0.35rem;
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  color: #bfdbfe;
+  font-size: 0.85rem;
+}
+
+.raise-actions {
+  margin-top: 0.7rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+
 .poker-action {
   border: 1px solid transparent;
   border-radius: 8px;
@@ -269,5 +339,14 @@ h2 {
   .playing-card {
     width: 50px;
     height: 72px;
+  }
+
+  .raise-meta {
+    flex-direction: column;
+  }
+
+  .raise-input-wrap {
+    flex-direction: column;
+    align-items: flex-start;
   }
 }

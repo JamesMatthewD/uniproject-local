@@ -1,14 +1,16 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-
+import { getOpponentAction } from "@/app/opponents/opponentAI";
+import * as defaultOpponentModule from "@/app/opponents/example";
+import { AVAILABLE_OPPONENTS, getOpponentNames, getOpponentByName, getOpponentDisplayName } from "@/app/opponents/index";
 const STARTING_CHIPS = 1000;
 const SMALL_BLIND = 10;
 const BIG_BLIND = 20;
 const RAISE_INCREMENT = 20;
 const PLAYER_NAMES = ["You", "Alex", "Riley", "Jordan"];
-const STREETS = ["pre-flop", "flop", "turn", "river", "showdown"];
+const STREETS = ["pre-flop", "flop", "turn", "river", "final-bet", "showdown"];
 const RANK_VALUE = {
   "2": 2,
   "3": 3,
@@ -196,6 +198,35 @@ function evaluateSevenCards(cards) {
   return best;
 }
 
+function evaluateCurrentHand(cards) {
+  if (cards.length >= 5) {
+    return evaluateSevenCards(cards).name;
+  }
+
+  const values = cards.map((card) => RANK_VALUE[card.split("-")[0]]);
+  const counts = new Map();
+  for (const value of values) {
+    counts.set(value, (counts.get(value) || 0) + 1);
+  }
+
+  const frequencies = [...counts.values()].sort((a, b) => b - a);
+  const pairCount = frequencies.filter((count) => count === 2).length;
+
+  if (frequencies[0] === 4) {
+    return "Four of a Kind";
+  }
+  if (frequencies[0] === 3) {
+    return "Three of a Kind";
+  }
+  if (pairCount >= 2) {
+    return "Two Pair";
+  }
+  if (pairCount === 1) {
+    return "One Pair";
+  }
+  return "High Card";
+}
+
 function settleShowdown(activePlayers, boardCards) {
   const scoredPlayers = activePlayers.map((player) => ({
     player,
@@ -228,6 +259,13 @@ function boardCardsToShow(street) {
     return 4;
   }
   return 5;
+}
+
+function streetLabel(street) {
+  if (street === "final-bet") {
+    return "final betting";
+  }
+  return street;
 }
 
 function clonePlayers(players) {
@@ -277,6 +315,23 @@ function PokerCard({ card, hidden = false, variant = "" }) {
   );
 }
 
+/**
+ * Build game info object for opponent AI decision making
+ * @private
+ */
+function buildGameInfo(opponent, players, boardCards, pot, currentBet, street) {
+  return {
+    myCards: opponent.cards,
+    myChips: opponent.chips,
+    boardCards,
+    potSize: pot,
+    currentBet,
+    street,
+    myPosition: opponent.id,
+    opponentChips: players[0].chips // Assume player 0 is the main opponent
+  };
+}
+
 export default function IngamePage() {
   const [players, setPlayers] = useState(() => {
     const { nextPlayers } = dealHand(initialPlayers());
@@ -300,17 +355,64 @@ export default function IngamePage() {
   const [message, setMessage] = useState("Blinds posted. Pre-flop action on you.");
   const [handFinished, setHandFinished] = useState(false);
   const [showdownHands, setShowdownHands] = useState({});
+  const [raisePanelOpen, setRaisePanelOpen] = useState(false);
+  const [raisePercent, setRaisePercent] = useState(100);
+  const [raiseChipInput, setRaiseChipInput] = useState("");
+  const [opponentAIs, setOpponentAIs] = useState(() => {
+    const initialAIs = {};
+    for (let i = 1; i < PLAYER_NAMES.length; i += 1) {
+      initialAIs[i] = "example";
+    }
+    return initialAIs;
+  });
 
   const you = players[0];
   const canCall = !handFinished && !you.folded && (currentBet === 0 || you.chips > 0);
-  const raiseToAmount = currentBet === 0 ? BIG_BLIND + RAISE_INCREMENT : currentBet + RAISE_INCREMENT;
-  const canRaise = !handFinished && !you.folded && you.chips >= raiseToAmount;
+  const referencePot = Math.max(pot, BIG_BLIND);
+  const minRaiseChips = Math.min(you.chips, Math.max(currentBet + RAISE_INCREMENT, BIG_BLIND));
+  const maxPotPercent = Math.max(100, Math.ceil((you.chips / referencePot) * 100));
+  const minRaisePercent = Math.ceil((minRaiseChips / referencePot) * 100);
+  const sliderMinPercent = Math.min(maxPotPercent, Math.max(25, minRaisePercent));
+  const boundedRaisePercent = Math.min(maxPotPercent, Math.max(sliderMinPercent, raisePercent));
+  const rawRaiseChips = Math.round((referencePot * boundedRaisePercent) / 100);
+  const selectedRaiseChips = Math.max(minRaiseChips, Math.min(you.chips, rawRaiseChips));
+  const canRaise = !handFinished && !you.folded && you.chips > 0 && you.chips >= minRaiseChips;
+  const presetPercents = [25, 50, 75, 100].filter((percent) => percent <= maxPotPercent);
 
   const opponents = useMemo(() => players.slice(1), [players]);
   const visibleBoard = useMemo(
     () => boardCards.slice(0, boardCardsToShow(street)),
     [boardCards, street]
   );
+  const currentHandLabel = useMemo(
+    () => evaluateCurrentHand([...you.cards, ...visibleBoard]),
+    [you.cards, visibleBoard]
+  );
+
+  useEffect(() => {
+    if (raisePanelOpen) {
+      setRaiseChipInput(String(selectedRaiseChips));
+    }
+  }, [raisePanelOpen, selectedRaiseChips]);
+
+  function setRaiseByPercent(percent) {
+    const clampedPercent = Math.min(maxPotPercent, Math.max(sliderMinPercent, percent));
+    setRaisePercent(clampedPercent);
+  }
+
+  function setRaiseByChips(chips) {
+    const clampedChips = Math.max(minRaiseChips, Math.min(you.chips, chips));
+    const nextPercent = Math.round((clampedChips / referencePot) * 100);
+    setRaisePercent(Math.min(maxPotPercent, Math.max(sliderMinPercent, nextPercent)));
+    setRaiseChipInput(String(clampedChips));
+  }
+
+  function handleOpponentAIChange(opponentId, aiName) {
+    setOpponentAIs((prev) => ({
+      ...prev,
+      [opponentId]: aiName
+    }));
+  }
 
   function createNewHandFromPlayers(basePlayers) {
     const { nextPlayers, board } = dealHand(basePlayers);
@@ -338,6 +440,7 @@ export default function IngamePage() {
     setCurrentBet(BIG_BLIND);
     setHandFinished(false);
     setShowdownHands({});
+    setRaisePanelOpen(false);
     setMessage("Blinds posted. Pre-flop action on you.");
   }
 
@@ -385,6 +488,7 @@ export default function IngamePage() {
     setHandFinished(true);
     setCurrentBet(0);
     setShowdownHands(handNamesById);
+    setRaisePanelOpen(false);
     setMessage(resolvedMessage || `${winners[0].name} wins ${handPot} chips.`);
   }
 
@@ -398,13 +502,28 @@ export default function IngamePage() {
         continue;
       }
 
-      const baseFoldChance = street === "river" ? 0.2 : 0.3;
-      const foldChance = wasRaise ? baseFoldChance + 0.15 : baseFoldChance;
-      if (Math.random() < foldChance) {
+      // Build game info for opponent AI decision making
+      const gameInfo = buildGameInfo(opponent, workingPlayers, boardCards, workingPot, amountToMatch, street);
+      
+      // Get opponent's decision using selected AI
+      const selectedAIName = opponentAIs[opponent.id] || "example";
+      const selectedOpponentModule = getOpponentByName(selectedAIName);
+      const decision = getOpponentAction(selectedOpponentModule?.exampleOpponent, gameInfo);
+
+      if (decision.action === "fold") {
         opponent.folded = true;
         continue;
       }
 
+      if (decision.action === "raise" && decision.amount && decision.amount > 0) {
+        const raisedAmount = Math.min(decision.amount, opponent.chips);
+        opponent.chips -= raisedAmount;
+        workingPot += raisedAmount;
+        // For simplicity in multi-player, we continue with the raised amount for next players
+        continue;
+      }
+
+      // Default: call
       const paid = Math.min(amountToMatch, opponent.chips);
       opponent.chips -= paid;
       workingPot += paid;
@@ -417,7 +536,7 @@ export default function IngamePage() {
       return;
     }
 
-    if (street === "river") {
+    if (street === "final-bet") {
       finishHand(workingPlayers, workingPot, `River complete. Showdown: remaining players reveal. Winner takes ${workingPot} chips.`);
       return;
     }
@@ -429,7 +548,7 @@ export default function IngamePage() {
     setPot(workingPot);
     setStreet(nextStreet);
     setCurrentBet(0);
-    setMessage(`${userActionLabel} resolved. Moving to ${nextStreet}.`);
+    setMessage(`${userActionLabel} resolved. Moving to ${streetLabel(nextStreet)}.`);
   }
 
   function handleFold() {
@@ -440,6 +559,7 @@ export default function IngamePage() {
     const updatedPlayers = players.map((player, index) =>
       index === 0 ? { ...player, folded: true } : { ...player }
     );
+    setRaisePanelOpen(false);
     finishHand(updatedPlayers, pot, "You folded. Opponents collect the pot.");
   }
 
@@ -460,6 +580,7 @@ export default function IngamePage() {
 
     const paid = Math.min(amountToMatch, players[0].chips);
     const nextPot = pot + paid;
+    setRaisePanelOpen(false);
     setPlayers(updatedPlayers);
     setPot(nextPot);
     setMessage(amountToMatch === 0 ? "You checked." : `You called ${amountToMatch}.`);
@@ -472,12 +593,12 @@ export default function IngamePage() {
     );
   }
 
-  function handleRaise() {
+  function handleRaiseConfirm() {
     if (!canRaise) {
       return;
     }
 
-    const amountToMatch = raiseToAmount;
+    const amountToMatch = selectedRaiseChips;
     const updatedPlayers = players.map((player, index) => {
       if (index !== 0) {
         return { ...player };
@@ -489,11 +610,22 @@ export default function IngamePage() {
 
     const paid = Math.min(amountToMatch, players[0].chips);
     const nextPot = pot + paid;
+    setRaisePanelOpen(false);
     setPlayers(updatedPlayers);
     setPot(nextPot);
     setCurrentBet(amountToMatch);
-    setMessage(`You raised to ${amountToMatch}.`);
+    setMessage(`You raised ${boundedRaisePercent}% (${amountToMatch} chips).`);
     runBettingRound(updatedPlayers, amountToMatch, `Raise to ${amountToMatch}`, true, nextPot);
+  }
+
+  function openRaisePanel() {
+    if (!canRaise) {
+      return;
+    }
+
+    setRaiseByPercent(sliderMinPercent);
+    setRaiseChipInput(String(minRaiseChips));
+    setRaisePanelOpen(true);
   }
 
   return (
@@ -506,14 +638,27 @@ export default function IngamePage() {
         <header className="table-header">
           <h1>Poker Table</h1>
           <p>
-            Street: {street} | Pot: {pot} chips
+            Street: {streetLabel(street)} | Pot: {pot} chips
           </p>
         </header>
 
         <div className="opponents-row" aria-label="Opponents">
           {opponents.map((opponent) => (
             <article className="seat" key={opponent.id}>
-              <h2>{opponent.name}</h2>
+              <div style={{display: "flex", alignItems: "center", gap: "8px"}}>
+                <h2 style={{margin: 0}}>{opponent.name}</h2>
+                <select
+                  value={opponentAIs[opponent.id] || "example"}
+                  onChange={(e) => handleOpponentAIChange(opponent.id, e.target.value)}
+                  style={{padding: "4px 8px", fontSize: "14px"}}
+                >
+                  {getOpponentNames().map((aiName) => (
+                    <option key={aiName} value={aiName}>
+                      {getOpponentDisplayName(aiName)}
+                    </option>
+                  ))}
+                </select>
+              </div>
               <div className="cards-with-chips">
                 <div className="hole-cards hidden-cards" aria-label="Hidden cards">
                   {street === "showdown" && !opponent.folded ? (
@@ -553,6 +698,9 @@ export default function IngamePage() {
             </div>
             <p className="chip-tag">Chips: {you.chips}</p>
           </div>
+          <div className="hand-textbox" aria-label="Current hand strength">
+            Current hand: {currentHandLabel}
+          </div>
           {street === "showdown" && !you.folded && showdownHands[you.id] && (
             <p className="status-note">{showdownHands[you.id]}</p>
           )}
@@ -564,10 +712,88 @@ export default function IngamePage() {
             <button type="button" className="poker-action call" onClick={handleCall} disabled={!canCall}>
               {currentBet === 0 ? "Check" : `Call (${currentBet})`}
             </button>
-            <button type="button" className="poker-action raise" onClick={handleRaise} disabled={!canRaise}>
-              Raise ({raiseToAmount})
+            <button type="button" className="poker-action raise" onClick={openRaisePanel} disabled={!canRaise}>
+              Raise
             </button>
           </div>
+
+          {raisePanelOpen && canRaise && (
+            <section className="raise-panel" aria-label="Raise amount">
+              <p className="raise-value">Raise {boundedRaisePercent}% [{selectedRaiseChips} chips]</p>
+              <div className="raise-presets">
+                {presetPercents.map((percent) => {
+                  const chips = Math.max(
+                    minRaiseChips,
+                    Math.min(you.chips, Math.round((referencePot * percent) / 100))
+                  );
+                  return (
+                    <button
+                      key={percent}
+                      type="button"
+                      className="poker-action call"
+                      onClick={() => setRaiseByPercent(percent)}
+                    >
+                      {percent}% [{chips}]
+                    </button>
+                  );
+                })}
+                <button
+                  type="button"
+                  className="poker-action call"
+                  onClick={() => setRaiseByPercent(maxPotPercent)}
+                >
+                  All-in [{you.chips}]
+                </button>
+              </div>
+              <label className="raise-input-wrap">
+                <span>Custom chips</span>
+                <input
+                  type="number"
+                  className="raise-chip-input"
+                  min={minRaiseChips}
+                  max={you.chips}
+                  value={raiseChipInput}
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    setRaiseChipInput(value);
+
+                    const parsed = Number(value);
+                    if (Number.isNaN(parsed)) {
+                      return;
+                    }
+
+                    setRaiseByChips(parsed);
+                  }}
+                  onBlur={() => setRaiseByChips(Number(raiseChipInput || selectedRaiseChips))}
+                />
+              </label>
+              <input
+                type="range"
+                className="raise-slider"
+                min={sliderMinPercent}
+                max={maxPotPercent}
+                step={5}
+                value={boundedRaisePercent}
+                onChange={(event) => setRaiseByPercent(Number(event.target.value))}
+              />
+              <div className="raise-meta">
+                <span>{sliderMinPercent}% [{minRaiseChips} chips] min</span>
+                <span>{maxPotPercent}% [{you.chips} chips] all-in</span>
+              </div>
+              <div className="raise-actions">
+                <button type="button" className="poker-action raise" onClick={handleRaiseConfirm}>
+                  Confirm {boundedRaisePercent}% [{selectedRaiseChips}]
+                </button>
+                <button
+                  type="button"
+                  className="poker-action fold"
+                  onClick={() => setRaisePanelOpen(false)}
+                >
+                  Cancel
+                </button>
+              </div>
+            </section>
+          )}
 
           <p className="status-note">{message}</p>
 
