@@ -532,7 +532,17 @@ export default function IngamePage() {
     const activePlayers = workingPlayers.filter((player) => !player.folded);
     if (activePlayers.length <= 1) {
       const loneWinner = activePlayers[0] || workingPlayers[0];
-      finishHand(workingPlayers, workingPot, `${loneWinner.name} wins ${workingPot} chips (everyone else folded).`);
+      const winMessage = `${loneWinner.name} wins ${workingPot} chips (everyone else folded).`;
+      
+      // Update player state immediately to show folds
+      setPlayers(workingPlayers);
+      setPot(workingPot);
+      setMessage(winMessage);
+      
+      // Short delay to show folds visually, then finish hand
+      setTimeout(() => {
+        finishHand(workingPlayers, workingPot, winMessage);
+      }, 800);
       return;
     }
 
