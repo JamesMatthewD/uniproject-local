@@ -365,6 +365,9 @@ export default function IngamePage() {
     }
     return initialAIs;
   });
+  const [playerAIEnabled, setPlayerAIEnabled] = useState(false);
+  const [playerAISelected, setPlayerAISelected] = useState("example");
+  const [playerAIProcessing, setPlayerAIProcessing] = useState(false);
 
   const you = players[0];
   const canCall = !handFinished && !you.folded && (currentBet === 0 || you.chips > 0);
@@ -395,6 +398,18 @@ export default function IngamePage() {
     }
   }, [raisePanelOpen, selectedRaiseChips]);
 
+  // Handle player AI takeover
+  useEffect(() => {
+    if (!playerAIEnabled || playerAIProcessing || handFinished || !you.folded === false) return;
+
+    // Trigger AI action after a short delay
+    const timer = setTimeout(() => {
+      handlePlayerAIAction();
+    }, 800);
+
+    return () => clearTimeout(timer);
+  }, [playerAIEnabled, players, street, pot, currentBet, handFinished, playerAISelected, playerAIProcessing]);
+
   function setRaiseByPercent(percent) {
     const clampedPercent = Math.min(maxPotPercent, Math.max(sliderMinPercent, percent));
     setRaisePercent(clampedPercent);
@@ -412,6 +427,42 @@ export default function IngamePage() {
       ...prev,
       [opponentId]: aiName
     }));
+  }
+
+  function handlePlayerAIAction() {
+    if (!playerAIEnabled || playerAIProcessing || handFinished) return;
+
+    setPlayerAIProcessing(true);
+
+    // Build game info for the player
+    const gameInfo = buildGameInfo(you, players, visibleBoard, pot, currentBet, street);
+
+    // Get AI decision
+    const selectedModule = getOpponentByName(playerAISelected);
+    const decision = getOpponentAction(selectedModule?.exampleOpponent, gameInfo);
+
+    // Execute the decision
+    setTimeout(() => {
+      if (decision.action === "fold") {
+        handleFold();
+      } else if (decision.action === "raise" && decision.amount && decision.amount > 0) {
+        // Set raise amount and confirm
+        setRaisePercent(Math.round((decision.amount / referencePot) * 100));
+        setRaiseChipInput(String(decision.amount));
+        // Simulate raise confirmation
+        setTimeout(() => {
+          handleRaiseConfirm();
+          setPlayerAIProcessing(false);
+        }, 300);
+        return;
+      } else if (decision.action === "call" || decision.action === "check") {
+        handleCall();
+      } else {
+        // Default to call
+        handleCall();
+      }
+      setPlayerAIProcessing(false);
+    }, 600);
   }
 
   function createNewHandFromPlayers(basePlayers) {
@@ -714,6 +765,53 @@ export default function IngamePage() {
           {street === "showdown" && !you.folded && showdownHands[you.id] && (
             <p className="status-note">{showdownHands[you.id]}</p>
           )}
+
+          {/* Player AI Takeover Controls */}
+          <div style={{ marginBottom: "1rem", padding: "0.75rem", background: "#1f2937", borderRadius: "6px", marginTop: "0.75rem" }}>
+            <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.5rem", cursor: "pointer" }}>
+              <input
+                type="checkbox"
+                checked={playerAIEnabled}
+                onChange={(e) => setPlayerAIEnabled(e.target.checked)}
+                disabled={handFinished}
+                style={{ cursor: "pointer" }}
+              />
+              <span>Enable AI Takeover</span>
+            </label>
+            
+            {playerAIEnabled && (
+              <div style={{ marginTop: "0.5rem" }}>
+                <label style={{ display: "block", marginBottom: "0.25rem", fontSize: "0.9rem" }}>
+                  Select AI:
+                </label>
+                <select
+                  value={playerAISelected}
+                  onChange={(e) => setPlayerAISelected(e.target.value)}
+                  disabled={handFinished}
+                  style={{
+                    width: "100%",
+                    padding: "0.5rem",
+                    borderRadius: "4px",
+                    border: "1px solid #4b5563",
+                    background: "#111827",
+                    color: "#fff",
+                    cursor: "pointer"
+                  }}
+                >
+                  {getOpponentNames().map(name => (
+                    <option key={name} value={name}>
+                      {getOpponentDisplayName(name)}
+                    </option>
+                  ))}
+                </select>
+                {playerAIProcessing && (
+                  <p style={{ marginTop: "0.5rem", fontSize: "0.9rem", color: "#fbbf24" }}>
+                    🤖 AI is thinking...
+                  </p>
+                )}
+              </div>
+            )}
+          </div>
 
           <div className="action-row">
             <button type="button" className="poker-action fold" onClick={handleFold} disabled={handFinished}>

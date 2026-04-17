@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { getOpponentAction } from "@/app/opponents/opponentAI";
+import { AVAILABLE_OPPONENTS, getOpponentNames, getOpponentByName, getOpponentDisplayName } from "@/app/opponents/index";
 
 const STARTING_CHIPS = 1000;
 const POKER_TABLE_SEATS = 6; // Number of seats at the table
@@ -75,6 +77,15 @@ export default function MultiplayerPage() {
   const [gameStarted, setGameStarted] = useState(false);
   const [playerSeatIndex, setPlayerSeatIndex] = useState(null);
   const [pollInterval, setPollInterval] = useState(null);
+  const [aiEnabled, setAiEnabled] = useState(false);
+  const [aiSelected, setAiSelected] = useState("example");
+  const [aiProcessing, setAiProcessing] = useState(false);
+  // Spectator mode for AI vs AI games
+  const [spectatorMode, setSpectatorMode] = useState(false);
+  const [selectedPlayer1AI, setSelectedPlayer1AI] = useState("");
+  const [spectatorGameState, setSpectatorGameState] = useState(null);
+  const [spectatorGameId, setSpectatorGameId] = useState(null);
+  const [spectatorAIList, setSpectatorAIList] = useState([]);
 
   // Initialize with room selection
   useEffect(() => {
@@ -115,6 +126,60 @@ export default function MultiplayerPage() {
 
     return () => clearInterval(interval);
   }, [gameStarted, gameId, playerId]);
+
+  // Handle AI takeover - automatically make actions when AI is enabled
+  useEffect(() => {
+    if (!aiEnabled || !canPlayerAct() || gameState?.status !== "active_hand") return;
+
+    const timer = setTimeout(() => {
+      handleAIAction();
+    }, 500); // Small delay to avoid too rapid actions
+
+    return () => clearTimeout(timer);
+  }, [aiEnabled, gameState, playerId, aiSelected, aiProcessing]);
+
+  // Poll spectator game state
+  useEffect(() => {
+    if (!spectatorGameId) return;
+
+    const fetchSpectatorState = async () => {
+      try {
+        const response = await fetch("/api/poker/state", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ gameId: spectatorGameId }),
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          if (data.gameState) {
+            setSpectatorGameState(data.gameState);
+          }
+        }
+      } catch (err) {
+        console.error("Spectator state fetch error:", err);
+      }
+    };
+
+    // Fetch immediately
+    fetchSpectatorState();
+
+    // Then poll every 500ms
+    const interval = setInterval(fetchSpectatorState, 500);
+
+    return () => clearInterval(interval);
+  }, [spectatorGameId]);
+
+  // Handle spectator AI actions - process AI decisions automatically
+  useEffect(() => {
+    if (!spectatorGameId || spectatorGameState?.status !== "active_hand") return;
+
+    const timer = setTimeout(() => {
+      processSpectatorAIAction();
+    }, 800); // Delay to make AI moves visible
+
+    return () => clearTimeout(timer);
+  }, [spectatorGameState, spectatorGameId, spectatorAIList]);
 
   const createGame = async () => {
     if (!playerId) return;
@@ -294,6 +359,162 @@ export default function MultiplayerPage() {
     return { x, y };
   };
 
+  const buildGameInfoForAI = () => {
+    const currentPlayer = gameState?.players?.find(p => p.id === playerId);
+    if (!currentPlayer) return null;
+
+    return {
+      myCards: currentPlayer.cards || [],
+      myChips: currentPlayer.chips || 0,
+      currentBet: currentPlayer.currentBet || 0,
+      street: gameState?.currentStreet || "pre-flop",
+      pot: gameState?.pot || 0,
+      board: gameState?.board || [],
+      communityCards: gameState?.communityCards || [],
+      opponents: (gameState?.players || [])
+        .filter(p => p.id !== playerId)
+        .map(p => ({
+          name: p.name,
+          chips: p.chips,
+          folded: p.folded,
+          currentBet: p.currentBet || 0
+        })),
+      myPosition: gameState?.players?.findIndex(p => p.id === playerId) || 0,
+    };
+  };
+
+  const handleAIAction = async () => {
+    if (!aiEnabled || aiProcessing || !canPlayerAct()) return;
+
+    setAiProcessing(true);
+    try {
+      const gameInfo = buildGameInfoForAI();
+      if (!gameInfo) return;
+
+      const aiModule = getOpponentByName(aiSelected);
+      if (!aiModule) return;
+
+      const decision = getOpponentAction(aiModule?.exampleOpponent, gameInfo);
+
+      // Execute the AI decision
+      if (decision.action === "fold") {
+        await handleAction("fold");
+      } else if (decision.action === "check") {
+        await handleAction("check");
+      } else if (decision.action === "call") {
+        await handleAction("call");
+      } else if (decision.action === "raise" && decision.amount) {
+        await handleAction("raise", decision.amount);
+      } else {
+        // Default to check/call
+        if (canCheck()) {
+          await handleAction("check");
+        } else {
+          await handleAction("call");
+        }
+      }
+    } catch (err) {
+      console.error("AI action error:", err);
+    } finally {
+      setAiProcessing(false);
+    }
+  };
+
+  const createSpectatorGame = async () => {
+    if (!playerId || !selectedPlayer1AI) return;
+    try {
+      setLoading(true);
+      // Build AI list: Player 1 gets selected AI, rest are random
+      const availableAIs = getOpponentNames();
+      const aiList = [selectedPlayer1AI];
+      
+      // Randomly select 5 more AIs from the available pool
+      const remaining = availableAIs.filter(ai => ai !== selectedPlayer1AI);
+      while (aiList.length < 6 && remaining.length > 0) {
+        const randomIndex = Math.floor(Math.random() * remaining.length);
+        aiList.push(remaining.splice(randomIndex, 1)[0]);
+      }
+      
+      const response = await fetch("/api/poker/create", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          playerId: `spectator_${Math.random().toString(36).substr(2, 9)}`,
+          playerName: "Spectator",
+          isSpectator: true,
+          aiPlayers: aiList,
+        }),
+      });
+
+      if (!response.ok) throw new Error("Failed to create spectator game");
+
+      const data = await response.json();
+      setSpectatorGameId(data.gameId);
+      setSpectatorGameState(data.gameState);
+      setSpectatorAIList(aiList);
+      setLoading(false);
+    } catch (err) {
+      setError(err.message);
+      setLoading(false);
+    }
+  };
+
+  const processSpectatorAIAction = async () => {
+    if (!spectatorGameState || spectatorGameState.status !== "active_hand") return;
+
+    try {
+      const currentPlayer = spectatorGameState.players?.[spectatorGameState.currentPlayerIndex];
+      if (!currentPlayer) return;
+
+      const aiName = spectatorAIList[spectatorGameState.currentPlayerIndex];
+      if (!aiName) return;
+
+      // Build game info
+      const gameInfo = {
+        myCards: currentPlayer.cards || [],
+        myChips: currentPlayer.chips || 0,
+        currentBet: currentPlayer.currentBet || 0,
+        street: spectatorGameState.currentStreet || "pre-flop",
+        pot: spectatorGameState.pot || 0,
+        board: spectatorGameState.board || [],
+        communityCards: spectatorGameState.communityCards || [],
+        opponents: (spectatorGameState.players || [])
+          .filter(p => p.id !== currentPlayer.id)
+          .map(p => ({
+            name: p.name,
+            chips: p.chips,
+            folded: p.folded,
+            currentBet: p.currentBet || 0
+          })),
+        myPosition: spectatorGameState.currentPlayerIndex,
+      };
+
+      const aiModule = getOpponentByName(aiName);
+      if (!aiModule) return;
+
+      const decision = getOpponentAction(aiModule?.exampleOpponent, gameInfo);
+
+      // Execute AI decision
+      const response = await fetch("/api/poker/action", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          gameId: spectatorGameId,
+          playerId: currentPlayer.id,
+          action: decision.action,
+          amount: decision.amount,
+        }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        setSpectatorGameState(data.gameState);
+      }
+    } catch (err) {
+      console.error("Spectator AI action error:", err);
+    }
+  };
+
   // Room selection view
   if (!gameStarted) {
     return (
@@ -334,6 +555,43 @@ export default function MultiplayerPage() {
               disabled={!inputCode}
             >
               Join Game
+            </button>
+          </div>
+
+          <div className="card">
+            <h2>Watch AI Battle</h2>
+            <p>Select an AI for Player 1. Other players will be random.</p>
+            <div style={{ marginTop: "0.75rem" }}>
+              <label style={{ display: "block", marginBottom: "0.25rem", fontSize: "0.9rem" }}>
+                Player 1 AI:
+              </label>
+              <select
+                value={selectedPlayer1AI}
+                onChange={(e) => setSelectedPlayer1AI(e.target.value)}
+                style={{
+                  width: "100%",
+                  padding: "0.5rem",
+                  borderRadius: "4px",
+                  border: "1px solid #4b5563",
+                  background: "#111827",
+                  color: "#fff"
+                }}
+              >
+                <option value="">Select AI...</option>
+                {getOpponentNames().map(name => (
+                  <option key={name} value={name}>
+                    {getOpponentDisplayName(name)}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <button
+              onClick={createSpectatorGame}
+              className="primary-button"
+              disabled={!selectedPlayer1AI}
+              style={{ marginTop: "0.75rem" }}
+            >
+              Start Spectating
             </button>
           </div>
         </div>
@@ -608,6 +866,52 @@ export default function MultiplayerPage() {
                 Waiting for {getCurrentActingPlayer()?.name || "player"} to act...
               </p>
             )}
+
+            {/* AI Takeover Controls */}
+            <div style={{ marginBottom: "1rem", padding: "0.75rem", background: "#1f2937", borderRadius: "6px" }}>
+              <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.5rem", cursor: "pointer" }}>
+                <input
+                  type="checkbox"
+                  checked={aiEnabled}
+                  onChange={(e) => setAiEnabled(e.target.checked)}
+                  style={{ cursor: "pointer" }}
+                />
+                <span>Enable AI Takeover</span>
+              </label>
+              
+              {aiEnabled && (
+                <div style={{ marginTop: "0.5rem" }}>
+                  <label style={{ display: "block", marginBottom: "0.25rem", fontSize: "0.9rem" }}>
+                    Select AI:
+                  </label>
+                  <select
+                    value={aiSelected}
+                    onChange={(e) => setAiSelected(e.target.value)}
+                    style={{
+                      width: "100%",
+                      padding: "0.5rem",
+                      borderRadius: "4px",
+                      border: "1px solid #4b5563",
+                      background: "#111827",
+                      color: "#fff",
+                      cursor: "pointer"
+                    }}
+                  >
+                    {getOpponentNames().map(name => (
+                      <option key={name} value={name}>
+                        {getOpponentDisplayName(name)}
+                      </option>
+                    ))}
+                  </select>
+                  {aiProcessing && (
+                    <p style={{ marginTop: "0.5rem", fontSize: "0.9rem", color: "#fbbf24" }}>
+                      🤖 AI is thinking...
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
+
             <div className="button-group">
               <button
                 className="action-button fold"
@@ -664,6 +968,112 @@ export default function MultiplayerPage() {
           ← Back to Home
         </Link>
       </div>
+
+      {spectatorGameId && (
+        <div style={{ marginTop: "2rem", padding: "1rem", background: "#111827", borderRadius: "10px", border: "1px solid #334155" }}>
+          <h2 style={{ marginTop: 0 }}>🤖 AI Battle - Spectator Mode</h2>
+          
+          {/* Spectator Poker Table */}
+          <div className="poker-table">
+            <div className="table-felt">
+              {/* Community Cards */}
+              <div className="community-cards">
+                {spectatorGameState?.board?.length > 0 ? (
+                  <>
+                    <h3>Community Cards</h3>
+                    <div className="cards-display">
+                      {spectatorGameState.board.map((card, idx) => (
+                        <div key={idx}>
+                          <CardImage card={card} size="large" />
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                ) : (
+                  <div className="empty-board">
+                    {spectatorGameState?.status === "waiting_for_players" ? "Waiting for players..." : "No cards dealt yet"}
+                  </div>
+                )}
+              </div>
+
+              {/* Pot */}
+              <div className="pot-display">
+                <h4>Pot</h4>
+                <p>£{spectatorGameState?.pot || 0}</p>
+              </div>
+
+              {/* Player Seats for Spectator */}
+              {spectatorGameState?.players?.map((player, index) => {
+                const pos = getSeatPosition(index);
+                const isCurrentPlayer = spectatorGameState?.currentPlayerIndex === index;
+                
+                return (
+                  <div
+                    key={player.id}
+                    className={`player-seat ${isCurrentPlayer ? "acting" : ""}`}
+                    style={{
+                      left: `${pos.x}%`,
+                      top: `${pos.y}%`,
+                    }}
+                  >
+                    {isCurrentPlayer && <div className="acting-badge">⏱️ Acting</div>}
+                    
+                    <div className="player-info">
+                      <h4>{player.name} <span className="ai-badge">🤖</span></h4>
+                      <p className="chips">£{player.chips}</p>
+                    </div>
+                    
+                    {player.cards && player.cards.length > 0 && (
+                      <div className="player-cards">
+                        {player.cards.map((card, idx) => (
+                          <CardImage 
+                            key={idx} 
+                            card={card} 
+                            isHidden={spectatorGameState?.status !== "hand_complete" && player.folded === false}
+                            size="medium" 
+                          />
+                        ))}
+                      </div>
+                    )}
+                    
+                    {player.folded && <div className="folded-badge">Folded</div>}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Spectator Info */}
+          <div style={{ display: "flex", gap: "1rem", marginTop: "1rem", flexWrap: "wrap" }}>
+            <div style={{ flex: 1, minWidth: "200px" }}>
+              <p><strong>Current Street:</strong> {spectatorGameState?.currentStreet || "Pre-Flop"}</p>
+              <p><strong>Hand #:</strong> {spectatorGameState?.handNumber || 0}</p>
+            </div>
+            {spectatorGameState?.status === "hand_complete" && (
+              <div style={{ flex: 1, minWidth: "200px", padding: "0.75rem", background: "#1f2937", borderRadius: "6px" }}>
+                <p><strong>Winner:</strong> {spectatorGameState?.winners?.map(wid => {
+                  const winner = spectatorGameState?.players?.find(p => p.id === wid);
+                  return winner?.name;
+                }).join(", ")}</p>
+                <p><strong>Hand:</strong> {spectatorGameState?.winningHandName}</p>
+                <p style={{ fontSize: "0.85rem", color: "#9ca3af" }}>Next round in 3 seconds...</p>
+              </div>
+            )}
+          </div>
+
+          <button
+            onClick={() => {
+              setSpectatorGameId(null);
+              setSpectatorGameState(null);
+              setGameStarted(false);
+            }}
+            className="back-button"
+            style={{ marginTop: "1rem" }}
+          >
+            ← Leave Spectator Mode
+          </button>
+        </div>
+      )}
 
       <style jsx>{`
         .primary-button {
@@ -921,6 +1331,30 @@ export default function MultiplayerPage() {
         .player-info {
           margin-bottom: 0.5rem;
           line-height: 1.2;
+        }
+
+        .ai-badge {
+          font-size: 1rem;
+          margin-left: 0.25rem;
+        }
+
+        .folded-badge {
+          font-size: 0.75rem;
+          color: #ef4444;
+          font-weight: bold;
+          margin-top: 0.25rem;
+        }
+
+        .acting-badge {
+          display: inline-block;
+          background: #fbbf24;
+          color: #000;
+          padding: 0.25rem 0.5rem;
+          border-radius: 4px;
+          font-size: 0.75rem;
+          font-weight: bold;
+          margin-bottom: 0.5rem;
+          animation: pulse 1s infinite;
         }
 
         .player-name {

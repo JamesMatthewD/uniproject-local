@@ -141,6 +141,10 @@ function buildToyPokerGameInfo(opponent, players, pot, currentBet) {
 }
 
 export default function ToyPokerPage() {
+  const [gameMode, setGameMode] = useState("room-select"); // "room-select", "playing", "spectating"
+  const [selectedPlayer1AI, setSelectedPlayer1AI] = useState("");
+  const [spectatorAIList, setSpectatorAIList] = useState([]);
+
   const [players, setPlayers] = useState(() => {
     const initial = initialPlayers();
     const dealt = dealHand(initial);
@@ -156,8 +160,43 @@ export default function ToyPokerPage() {
   const [antagonistBet, setAntagonistBet] = useState(null);
   const [opponentAI, setOpponentAI] = useState("example");
 
+  // Spectator state
+  const [spectatorPlayers, setSpectatorPlayers] = useState(null);
+  const [spectatorPot, setSpectatorPot] = useState(ANTE * 2);
+  const [spectatorPhase, setSpectatorPhase] = useState("betting");
+  const [spectatorMessage, setSpectatorMessage] = useState("Ante posted. AI 1 is thinking...");
+  const [spectatorAntagonistBet, setSpectatorAntagonistBet] = useState(null);
+
   const you = players[0];
   const opponent = players[1];
+
+  const startSpectatorGame = async () => {
+    if (!selectedPlayer1AI) return;
+
+    const availableAIs = getOpponentNames();
+    const aiList = [selectedPlayer1AI];
+    
+    const remaining = availableAIs.filter(ai => ai !== selectedPlayer1AI);
+    const randomIndex = Math.floor(Math.random() * remaining.length);
+    aiList.push(remaining[randomIndex]);
+
+    setSpectatorAIList(aiList);
+    
+    const initial = initialPlayers();
+    const dealt = dealHand(initial);
+    const refreshed = dealt.map((player) => ({
+      ...player,
+      chips: player.chips - ANTE,
+      name: aiList[player.id] ? `AI: ${getOpponentDisplayName(aiList[player.id])}` : player.name
+    }));
+
+    setSpectatorPlayers(refreshed);
+    setSpectatorPot(ANTE * 2);
+    setSpectatorPhase("betting");
+    setSpectatorMessage("Ante posted. AI 1 is thinking...");
+    setSpectatorAntagonistBet(null);
+    setGameMode("spectating");
+  };
 
   function startNewHand() {
     const initial = initialPlayers();
@@ -173,6 +212,26 @@ export default function ToyPokerPage() {
     setPhase("betting");
     setMessage("Ante posted. Your move.");
     setAntagonistBet(null);
+  }
+
+  function startNewSpectatorHand() {
+    const initial = initialPlayers();
+    const dealt = dealHand(initial);
+    const refreshed = dealt.map((player) => ({
+      ...player,
+      chips: player.chips - ANTE,
+      name: spectatorAIList[player.id] ? `AI: ${getOpponentDisplayName(spectatorAIList[player.id])}` : player.name
+    }));
+
+    setSpectatorPlayers(refreshed);
+    setSpectatorPot(ANTE * 2);
+    setSpectatorPhase("betting");
+    setSpectatorMessage("Ante posted. AI 1 is thinking...");
+    setSpectatorAntagonistBet(null);
+
+    setTimeout(() => {
+      processSpectatorMove(refreshed, ANTE * 2, 0, null);
+    }, 1000);
   }
 
   function handleCall() {
@@ -248,6 +307,321 @@ export default function ToyPokerPage() {
     }, 1000);
   }
 
+  function processSpectatorMove(currentPlayers, currentPot, currentAntagonistBet, lastPlayerIndex) {
+    if (spectatorPhase !== "betting") return;
+
+    const currentPlayerIndex = lastPlayerIndex === 0 ? 1 : 0;
+    const currentPlayer = currentPlayers[currentPlayerIndex];
+    const otherPlayer = currentPlayers[1 - currentPlayerIndex];
+
+    if (currentPlayer.folded) {
+      spectatorResolveHand(currentPlayers, currentPot);
+      return;
+    }
+
+    const gameInfo = buildToyPokerGameInfo(currentPlayer, currentPlayers, currentPot, currentAntagonistBet);
+    const aiName = spectatorAIList[currentPlayerIndex];
+    const selectedOpponentModule = getOpponentByName(aiName);
+    const decision = getOpponentAction(selectedOpponentModule?.exampleOpponent, gameInfo);
+
+    const playerDisplayName = `AI: ${getOpponentDisplayName(aiName)}`;
+
+    if (decision.action === "fold") {
+      setSpectatorMessage(`${playerDisplayName} folded. Other player wins!`);
+      const nextPlayers = currentPlayers.map((p, idx) =>
+        idx === currentPlayerIndex ? { ...p, folded: true } : p
+      );
+      setSpectatorPlayers(nextPlayers);
+      setSpectatorPhase("result");
+      return;
+    }
+
+    if (lastPlayerIndex === null) {
+      // First move (AI 1 acts first)
+      if (decision.action === "raise" || decision.action === "call") {
+        const betAmount = decision.amount || 10;
+        setSpectatorMessage(`${playerDisplayName} raised ${betAmount}. Other AI is deciding...`);
+        setSpectatorAntagonistBet(betAmount);
+
+        setTimeout(() => {
+          processSpectatorMove(currentPlayers, currentPot + betAmount, betAmount, 0);
+        }, 1000);
+      } else {
+        setSpectatorMessage(`${playerDisplayName} checked.`);
+        setTimeout(() => {
+          processSpectatorMove(currentPlayers, currentPot, 0, 0);
+        }, 1000);
+      }
+    } else if (currentPlayerIndex === 1 && lastPlayerIndex === 0) {
+      // AI 2 responding to AI 1
+      if (decision.action === "fold") {
+        setSpectatorMessage(`${playerDisplayName} folded!`);
+        const nextPlayers = currentPlayers.map((p, idx) =>
+          idx === 1 ? { ...p, folded: true } : p
+        );
+        setSpectatorPlayers(nextPlayers);
+        setSpectatorPhase("result");
+      } else {
+        // AI 2 calls
+        const potIncrease = Math.min(currentPlayer.chips, currentAntagonistBet);
+        const nextPlayers = currentPlayers.map((p, idx) =>
+          idx === 1 ? { ...p, chips: p.chips - potIncrease } : p
+        );
+        setSpectatorPlayers(nextPlayers);
+        setSpectatorMessage("Both AIs called. Revealing cards...");
+        setSpectatorPhase("result");
+
+        setTimeout(() => {
+          spectatorResolveHand(nextPlayers, currentPot + potIncrease);
+        }, 1500);
+      }
+    }
+  }
+
+  function spectatorResolveHand(roundPlayers, roundPot) {
+    const ai1Rank = getCardRank(roundPlayers[0].card);
+    const ai2Rank = getCardRank(roundPlayers[1].card);
+
+    let resultMsg;
+    let winner;
+
+    if (ai1Rank > ai2Rank) {
+      winner = 0;
+      const ai1Name = `AI: ${getOpponentDisplayName(spectatorAIList[0])}`;
+      resultMsg = `${ai1Name} wins ${roundPot}! ${roundPlayers[0].card} beats ${roundPlayers[1].card}.`;
+    } else if (ai2Rank > ai1Rank) {
+      winner = 1;
+      const ai2Name = `AI: ${getOpponentDisplayName(spectatorAIList[1])}`;
+      resultMsg = `${ai2Name} wins ${roundPot}! ${roundPlayers[1].card} beats ${roundPlayers[0].card}.`;
+    } else {
+      resultMsg = `Tie! Pot split.`;
+      winner = -1;
+    }
+
+    let nextPlayers = roundPlayers;
+    if (winner === 0) {
+      nextPlayers = roundPlayers.map((player, index) =>
+        index === 0 ? { ...player, chips: player.chips + roundPot } : player
+      );
+    } else if (winner === 1) {
+      nextPlayers = roundPlayers.map((player, index) =>
+        index === 1 ? { ...player, chips: player.chips + roundPot } : player
+      );
+    } else if (winner === -1) {
+      const split = Math.floor(roundPot / 2);
+      nextPlayers = roundPlayers.map((player, index) => ({
+        ...player,
+        chips: player.chips + split
+      }));
+    }
+
+    setSpectatorPlayers(nextPlayers);
+    setSpectatorPhase("result");
+    setSpectatorMessage(resultMsg);
+  }
+
+  // Room selector view
+  if (gameMode === "room-select") {
+    return (
+      <main className="container">
+        <h1>Toy Poker - High Card</h1>
+        <p>Play against an AI opponent or watch two AIs battle.</p>
+
+        <div className="room-selector">
+          <div className="card">
+            <h2>Play Game</h2>
+            <p>Challenge an AI opponent to a high card poker game.</p>
+            <button onClick={() => setGameMode("playing")} className="primary-button">
+              Start Playing
+            </button>
+          </div>
+
+          <div className="card">
+            <h2>Watch AI Battle</h2>
+            <p>Select an AI for Player 1. The other AI will be random.</p>
+            <div style={{ marginTop: "0.75rem" }}>
+              <label style={{ display: "block", marginBottom: "0.25rem", fontSize: "0.9rem" }}>
+                Player 1 AI:
+              </label>
+              <select
+                value={selectedPlayer1AI}
+                onChange={(e) => setSelectedPlayer1AI(e.target.value)}
+                style={{
+                  width: "100%",
+                  padding: "0.5rem",
+                  borderRadius: "4px",
+                  border: "1px solid #4b5563",
+                  background: "#111827",
+                  color: "#fff"
+                }}
+              >
+                <option value="">Select AI...</option>
+                {getOpponentNames().map(name => (
+                  <option key={name} value={name}>
+                    {getOpponentDisplayName(name)}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <button
+              onClick={startSpectatorGame}
+              className="primary-button"
+              disabled={!selectedPlayer1AI}
+              style={{ marginTop: "0.75rem" }}
+            >
+              Start Spectating
+            </button>
+          </div>
+        </div>
+
+        <Link href="/" className="back-link">
+          ← Back to Home
+        </Link>
+
+        <style jsx>{`
+          .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 2rem;
+            background: #0f172a;
+            color: #e5e7eb;
+            min-height: 100vh;
+          }
+
+          .room-selector {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1.5rem;
+            margin: 2rem 0;
+          }
+
+          .card {
+            background: #1e293b;
+            padding: 1.5rem;
+            border-radius: 8px;
+            border: 1px solid #334155;
+          }
+
+          .card h2 {
+            margin-top: 0;
+          }
+
+          .primary-button {
+            width: 100%;
+            padding: 0.75rem 1rem;
+            background: #3b82f6;
+            border: none;
+            border-radius: 6px;
+            color: white;
+            font-weight: bold;
+            font-size: 1rem;
+            cursor: pointer;
+            transition: background-color 0.15s ease;
+            margin-top: 0.5rem;
+          }
+
+          .primary-button:hover:not(:disabled) {
+            background: #2563eb;
+          }
+
+          .primary-button:disabled {
+            background: #6b7280;
+            cursor: not-allowed;
+          }
+
+          .back-link {
+            color: #60a5fa;
+            text-decoration: none;
+            margin-top: 2rem;
+            display: inline-block;
+          }
+
+          .back-link:hover {
+            color: #93c5fd;
+          }
+
+          @media (max-width: 768px) {
+            .room-selector {
+              grid-template-columns: 1fr;
+            }
+          }
+        `}</style>
+      </main>
+    );
+  }
+
+  // Spectator view
+  if (gameMode === "spectating" && spectatorPlayers) {
+    const spectatorAI1 = spectatorPlayers[0];
+    const spectatorAI2 = spectatorPlayers[1];
+
+    return (
+      <main className="ingame-page">
+        <button
+          onClick={() => {
+            setGameMode("room-select");
+            setSelectedPlayer1AI("");
+            setSpectatorAIList([]);
+          }}
+          className="ingame-back-link"
+          style={{ cursor: "pointer", background: "none", border: "none", color: "#60a5fa" }}
+        >
+          ← Back to Menu
+        </button>
+
+        <section className="green-box poker-table" aria-label="Spectator toy poker table">
+          <header className="table-header">
+            <h1>Toy Poker - High Card (Spectator)</h1>
+            <p>Pot: {spectatorPot} chips</p>
+          </header>
+
+          <div className="opponents-row" aria-label="AI 1">
+            <article className="seat">
+              <h2>{spectatorAI1.name}</h2>
+              <div className="cards-with-chips">
+                <div className="hole-cards hidden-cards">
+                  {spectatorPhase === "result" && spectatorAI1.card ? (
+                    <PokerCard card={spectatorAI1.card} />
+                  ) : (
+                    <PokerCard card="X-X" hidden variant="back" />
+                  )}
+                </div>
+                <p className="chip-tag">Chips: {spectatorAI1.chips}</p>
+              </div>
+              {spectatorAI1.folded && <p className="status-note">Folded</p>}
+            </article>
+          </div>
+
+          <section className="user-seat" aria-label="AI 2 and info">
+            <h2>{spectatorAI2.name}</h2>
+            <div className="cards-with-chips">
+              <div className="hole-cards hidden-cards">
+                {spectatorPhase === "result" && spectatorAI2.card ? (
+                  <PokerCard card={spectatorAI2.card} />
+                ) : (
+                  <PokerCard card="X-X" hidden variant="back" />
+                )}
+              </div>
+              <p className="chip-tag">Chips: {spectatorAI2.chips}</p>
+            </div>
+
+            <p className="status-note">{spectatorMessage}</p>
+
+            {spectatorPhase === "result" && (
+              <button
+                type="button"
+                className="poker-action new-hand"
+                onClick={startNewSpectatorHand}
+              >
+                Play Again
+              </button>
+            )}
+          </section>
+        </section>
+      </main>
+    );
+  }
+
   function handleFold() {
     if (phase !== "betting") {
       return;
@@ -307,11 +681,16 @@ export default function ToyPokerPage() {
     setMessage(resultMsg);
   }
 
+  // Player game view
   return (
     <main className="ingame-page">
-      <Link href="/" className="ingame-back-link">
-        Back to main page
-      </Link>
+      <button
+        onClick={() => setGameMode("room-select")}
+        className="ingame-back-link"
+        style={{ cursor: "pointer", background: "none", border: "none", color: "#60a5fa" }}
+      >
+        ← Back to Menu
+      </button>
 
       <section className="green-box poker-table" aria-label="Toy poker table">
         <header className="table-header">
@@ -396,6 +775,10 @@ export default function ToyPokerPage() {
           )}
         </section>
       </section>
+
+      <Link href="/" className="ingame-back-link" style={{ marginTop: "1rem", display: "block" }}>
+        ← Home
+      </Link>
     </main>
   );
 }
