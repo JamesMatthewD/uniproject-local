@@ -72,6 +72,12 @@ export default function AgentsPage() {
   const [successMessage, setSuccessMessage] = useState("");
   const [copiedId, setCopiedId] = useState(null);
   
+  // Fetch agent by ID state
+  const [fetchAgentId, setFetchAgentId] = useState("");
+  const [isFetchingAgent, setIsFetchingAgent] = useState(false);
+  const [fetchError, setFetchError] = useState("");
+  const [fetchedAgent, setFetchedAgent] = useState(null);
+  
   // Test results state
   const [testingAgent, setTestingAgent] = useState(null);
   const [testingOpponent, setTestingOpponent] = useState(null);
@@ -361,6 +367,44 @@ export default function AgentsPage() {
     }
   };
 
+  const fetchAgentById = async () => {
+    if (!fetchAgentId.trim()) {
+      setFetchError("Please enter an agent ID");
+      return;
+    }
+
+    setIsFetchingAgent(true);
+    setFetchError("");
+    setFetchedAgent(null);
+
+    try {
+      // First, check in uploaded agents (from localStorage)
+      const foundAgent = uploadedAgents.find(a => a.id === fetchAgentId.trim());
+      
+      if (foundAgent) {
+        setFetchedAgent(foundAgent);
+        setIsFetchingAgent(false);
+        return;
+      }
+
+      // TODO: When D1 database is configured, fetch from API here
+      // For now, just check localStorage
+      setFetchError("Agent not found. Make sure you have the correct ID.");
+      setIsFetchingAgent(false);
+    } catch (err) {
+      setFetchError("Error fetching agent: " + err.message);
+      setIsFetchingAgent(false);
+    }
+  };
+
+  const loadFetchedAgent = (agent) => {
+    setAgentCode(agent.code);
+    setAgentName(agent.name);
+    setValidationError("");
+    setFetchedAgent(null);
+    setFetchAgentId("");
+  };
+
   const testAgentWinRate = async (agent, opponent) => {
     setIsTesting(true);
     setTestError("");
@@ -514,6 +558,70 @@ export default function AgentsPage() {
           <button onClick={downloadExample} className="primary-button download-button">
             ⬇ Download example.js
           </button>
+        </section>
+
+        {/* Fetch Agent by ID Section */}
+        <section className="card">
+          <h2>Fetch Existing Agent</h2>
+          <p>Load an agent you previously uploaded by entering its ID.</p>
+          
+          <div className="form-group">
+            <label htmlFor="fetch-agent-id">Agent ID:</label>
+            <input
+              id="fetch-agent-id"
+              type="text"
+              placeholder="e.g., agent_1713360000_abc123def"
+              value={fetchAgentId}
+              onChange={(e) => setFetchAgentId(e.target.value)}
+              className="form-input"
+              onKeyPress={(e) => {
+                if (e.key === "Enter") {
+                  fetchAgentById();
+                }
+              }}
+            />
+          </div>
+
+          <button 
+            onClick={fetchAgentById} 
+            className="primary-button" 
+            disabled={isFetchingAgent}
+            style={{background: '#10b981'}}
+          >
+            {isFetchingAgent ? "Searching..." : "🔍 Fetch Agent"}
+          </button>
+
+          {fetchError && (
+            <div className="error-message" style={{marginTop: '1rem'}}>
+              ❌ {fetchError}
+            </div>
+          )}
+
+          {fetchedAgent && (
+            <div className="success-message" style={{marginTop: '1rem'}}>
+              <div className="success-content">
+                <p>✅ Agent found!</p>
+                <div style={{background: '#0f172a', padding: '0.75rem', borderRadius: '4px', marginBottom: '0.5rem'}}>
+                  <p style={{margin: '0 0 0.25rem 0', fontSize: '0.9rem', color: '#9ca3af'}}>
+                    <strong>Name:</strong> {fetchedAgent.name}
+                  </p>
+                  <p style={{margin: '0 0 0.25rem 0', fontSize: '0.9rem', color: '#9ca3af'}}>
+                    <strong>ID:</strong> <code style={{color: '#fbbf24'}}>{fetchedAgent.id}</code>
+                  </p>
+                  <p style={{margin: '0', fontSize: '0.9rem', color: '#9ca3af'}}>
+                    <strong>Uploaded:</strong> {fetchedAgent.uploadedAt}
+                  </p>
+                </div>
+                <button 
+                  onClick={() => loadFetchedAgent(fetchedAgent)} 
+                  className="primary-button"
+                  style={{width: '100%', marginTop: '0.5rem', background: '#3b82f6'}}
+                >
+                  📝 Load into Editor
+                </button>
+              </div>
+            </div>
+          )}
         </section>
 
         {/* Upload Form */}
@@ -789,7 +897,7 @@ export default function AgentsPage() {
                       <div className="results-content">
                         <div className="matchup-header">
                           <h3>{testingAgent.name} vs {testingOpponent.name}</h3>
-                          <p className="match-info">{result.matchCount} matches played</p>
+                          <p className="match-info">{result.matchCount} matches • Texas Hold'em</p>
                         </div>
 
                         <div className="results-grid">
@@ -895,7 +1003,7 @@ export default function AgentsPage() {
                   <div className="results-content">
                     <div className="matchup-header">
                       <h3>4-Player Tournament Results</h3>
-                      <p className="match-info">Latest: {latestResult.matchCount} matches against {latestResult.opponentCount} random opponents</p>
+                      <p className="match-info">{latestResult.matchCount} matches • Texas Hold'em 4-Player</p>
                     </div>
 
                     <div className="multi-way-stats">

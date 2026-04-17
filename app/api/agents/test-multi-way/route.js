@@ -1,50 +1,16 @@
-// API endpoint to test an agent in multi-way matches (4-player games)
+// API endpoint to test an agent in multi-way matches (4-player Texas Hold'em games)
 // POST /api/agents/test-multi-way
 
-const STARTING_CHIPS = 200;
-const ANTE = 5;
-const RANK_VALUE = {
-  "2": 2,
-  "3": 3,
-  "4": 4,
-  "5": 5,
-  "6": 6,
-  "7": 7,
-  "8": 8,
-  "9": 9,
-  "10": 10,
-  J: 11,
-  Q: 12,
-  K: 13,
-  A: 14
-};
+import { 
+  createDeck, 
+  shuffle, 
+  settleShowdown 
+} from '../poker-utils.js';
 
-function createDeck() {
-  const suits = ["H", "D", "C", "S"];
-  const ranks = ["2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K", "A"];
-  const deck = [];
-  for (const suit of suits) {
-    for (const rank of ranks) {
-      deck.push(`${rank}-${suit}`);
-    }
-  }
-  return deck;
-}
-
-function shuffle(cards) {
-  const copy = [...cards];
-  for (let i = copy.length - 1; i > 0; i -= 1) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [copy[i], copy[j]] = [copy[j], copy[i]];
-  }
-  return copy;
-}
-
-function getCardRank(card) {
-  if (!card) return 0;
-  const [rank] = card.split("-");
-  return RANK_VALUE[rank] || 0;
-}
+const STARTING_CHIPS = 1000;
+const SMALL_BLIND = 10;
+const BIG_BLIND = 20;
+const STREETS = ["pre-flop", "flop", "turn", "river", "showdown"];
 
 function executeAgent(agentCode, gameInfo, method) {
   try {
@@ -91,121 +57,189 @@ function executeAgent(agentCode, gameInfo, method) {
   }
 }
 
-// Run a single 4-player match
-function runMultiWayMatch(agents) {
-  // agents is an array of 4 agent codes
-  if (agents.length !== 4) {
+// Run a single 4-player Texas Hold'em match
+function runTexasHoldEmMatch(agentCodes) {
+  if (agentCodes.length !== 4) {
     throw new Error("Must have exactly 4 agents");
   }
 
-  const players = agents.map((code, idx) => ({
+  const players = agentCodes.map((code, idx) => ({
     id: idx,
     chips: STARTING_CHIPS,
-    card: null,
+    cards: [],
     folded: false,
     agentCode: code,
-    name: `Player ${idx + 1}`
+    lastBet: 0
   }));
 
-  let pot = ANTE * 4;
-  players.forEach(p => p.chips -= ANTE);
+  const deck = shuffle(createDeck());
 
-  let currentBet = ANTE;
-  let lastRaiser = (3) % 4; // Last player started
-  let currentPlayer = 0;
-  let roundsWithoutChange = 0;
-
-  while (roundsWithoutChange < 4 && players.filter(p => !p.folded).length >= 2) {
-    const player = players[currentPlayer];
-
-    if (player.folded) {
-      currentPlayer = (currentPlayer + 1) % 4;
-      continue;
+  // Deal hole cards
+  for (let i = 0; i < 2; i++) {
+    for (const player of players) {
+      player.cards.push(deck.pop());
     }
-
-    // Build game info
-    const gameInfo = {
-      myCards: player.card ? [player.card] : [],
-      myChips: player.chips,
-      boardCards: [],
-      potSize: pot,
-      currentBet: Math.max(0, currentBet - ANTE),
-      street: "pre-flop",
-      myPosition: currentPlayer,
-      opponentChips: players.filter((p, i) => i !== currentPlayer && !p.folded).reduce((sum, p) => sum + p.chips, 0)
-    };
-
-    let action = "check";
-
-    try {
-      const shouldFold = executeAgent(player.agentCode, gameInfo, "fold");
-      if (shouldFold && gameInfo.currentBet > 0) {
-        action = "fold";
-        player.folded = true;
-      } else {
-        const canCall = gameInfo.currentBet <= player.chips;
-        const shouldRaise = executeAgent(player.agentCode, gameInfo, "raise");
-
-        if (shouldRaise.shouldRaise && shouldRaise.amount > 0) {
-          const raiseAmount = Math.min(shouldRaise.amount, player.chips);
-          pot += raiseAmount;
-          player.chips -= raiseAmount;
-          currentBet += raiseAmount;
-          action = "raise";
-          lastRaiser = currentPlayer;
-          roundsWithoutChange = 0;
-        } else if (canCall && gameInfo.currentBet > 0) {
-          const callAmount = Math.min(gameInfo.currentBet, player.chips);
-          pot += callAmount;
-          player.chips -= callAmount;
-          action = "call";
-          roundsWithoutChange++;
-        } else {
-          action = "check";
-          roundsWithoutChange++;
-        }
-      }
-    } catch (error) {
-      console.error("Error executing agent:", error);
-      action = "fold";
-      player.folded = true;
-    }
-
-    if (action === "fold") {
-      const remainingPlayers = players.filter(p => !p.folded);
-      if (remainingPlayers.length === 1) {
-        const winner = remainingPlayers[0].id;
-        players[winner].chips += pot;
-        return winner;
-      }
-    }
-
-    currentPlayer = (currentPlayer + 1) % 4;
   }
 
-  // Showdown
+  // Deal board cards
+  const boardCards = [];
+  const flopCards = [deck.pop(), deck.pop(), deck.pop()];
+  const turnCard = deck.pop();
+  const riverCard = deck.pop();
+
+  let pot = 0;
+  let buttonPosition = 0;
+
+  // Post blinds
+  const smallBlindPos = (buttonPosition + 1) % 4;
+  const bigBlindPos = (buttonPosition + 2) % 4;
+
+  players[smallBlindPos].chips -= SMALL_BLIND;
+  pot += SMALL_BLIND;
+  players[bigBlindPos].chips -= BIG_BLIND;
+  pot += BIG_BLIND;
+
+  let streetIndex = 0;
+
+  // Process each street
+  for (const street of STREETS) {
+    if (street === "pre-flop") {
+      boardCards.length = 0;
+    } else if (street === "flop") {
+      boardCards.push(...flopCards);
+    } else if (street === "turn") {
+      boardCards.push(turnCard);
+    } else if (street === "river") {
+      boardCards.push(riverCard);
+    } else if (street === "showdown") {
+      break;
+    }
+
+    // Betting round
+    let roundsWithoutChange = 0;
+    let currentBet = streetIndex === 0 ? BIG_BLIND : 0;
+    let firstToAct = (bigBlindPos + 1) % 4;
+    let currentPlayer = streetIndex === 0 ? (smallBlindPos + 1) % 4 : firstToAct;
+
+    while (roundsWithoutChange < 4) {
+      const player = players[currentPlayer];
+
+      // Skip folded players
+      if (player.folded) {
+        currentPlayer = (currentPlayer + 1) % 4;
+        continue;
+      }
+
+      // Check if all other players folded
+      const activePlayers = players.filter(p => !p.folded);
+      if (activePlayers.length === 1) {
+        break;
+      }
+
+      // Skip if out of chips
+      if (player.chips === 0) {
+        currentPlayer = (currentPlayer + 1) % 4;
+        continue;
+      }
+
+      // Build game info
+      const gameInfo = {
+        myCards: player.cards,
+        myChips: player.chips,
+        boardCards: [...boardCards],
+        potSize: pot,
+        currentBet: Math.max(0, currentBet - player.lastBet),
+        street: street,
+        myPosition: currentPlayer,
+        opponentChips: players
+          .filter((p, i) => i !== currentPlayer && !p.folded)
+          .reduce((sum, p) => sum + p.chips, 0)
+      };
+
+      try {
+        if (currentBet > player.lastBet && player.chips > 0) {
+          // Player must fold, call, or raise
+          const shouldFold = executeAgent(player.agentCode, gameInfo, "fold");
+          if (shouldFold) {
+            player.folded = true;
+            break;
+          }
+
+          const raiseResult = executeAgent(player.agentCode, gameInfo, "raise");
+          if (raiseResult.shouldRaise && raiseResult.amount > 0 && player.chips > 0) {
+            const raiseAmount = Math.min(raiseResult.amount, player.chips);
+            player.chips -= raiseAmount;
+            pot += raiseAmount;
+            currentBet += raiseAmount;
+            player.lastBet = currentBet;
+            roundsWithoutChange = 0;
+          } else {
+            const callAmount = Math.min(currentBet - player.lastBet, player.chips);
+            player.chips -= callAmount;
+            pot += callAmount;
+            player.lastBet = currentBet;
+            roundsWithoutChange++;
+          }
+        } else if (player.chips > 0) {
+          const canCall = executeAgent(player.agentCode, gameInfo, "call");
+          
+          if (!canCall) {
+            const raiseResult = executeAgent(player.agentCode, gameInfo, "raise");
+            if (raiseResult.shouldRaise && raiseResult.amount > 0 && player.chips > 0) {
+              const raiseAmount = Math.min(raiseResult.amount, player.chips);
+              player.chips -= raiseAmount;
+              pot += raiseAmount;
+              currentBet += raiseAmount;
+              player.lastBet = currentBet;
+              roundsWithoutChange = 0;
+            }
+          } else if (currentBet > player.lastBet && player.chips > 0) {
+            const callAmount = Math.min(currentBet - player.lastBet, player.chips);
+            player.chips -= callAmount;
+            pot += callAmount;
+            player.lastBet = currentBet;
+            roundsWithoutChange++;
+          }
+        }
+      } catch (error) {
+        console.error("Error executing agent:", error);
+        player.folded = true;
+        break;
+      }
+
+      currentPlayer = (currentPlayer + 1) % 4;
+    }
+
+    // Reset for next street
+    players.forEach(p => p.lastBet = 0);
+    streetIndex++;
+  }
+
+  // Determine winner
   const activePlayers = players.filter(p => !p.folded);
 
   if (activePlayers.length === 1) {
-    const winner = activePlayers[0].id;
-    players[winner].chips += pot;
-    return winner;
+    const winner = activePlayers[0];
+    winner.chips += pot;
+    return winner.id;
   }
 
-  // Compare card ranks
-  let winner = activePlayers[0].id;
-  let maxRank = getCardRank(players[winner].card);
+  // Showdown - compare hands
+  const result = settleShowdown(
+    activePlayers.map(p => ({ 
+      id: p.id, 
+      cards: p.cards 
+    })), 
+    boardCards
+  );
 
-  for (let i = 1; i < activePlayers.length; i++) {
-    const rank = getCardRank(players[activePlayers[i].id].card);
-    if (rank > maxRank) {
-      maxRank = rank;
-      winner = activePlayers[i].id;
-    }
+  const winner = result.winners[0];
+  if (winner) {
+    players[winner.id].chips += pot;
+    return winner.id;
   }
 
-  players[winner].chips += pot;
-  return winner;
+  return 0;
 }
 
 export async function POST(request) {
@@ -234,35 +268,29 @@ export async function POST(request) {
       );
     }
 
-    // Always run 4-player matches, pad with copies of opponents if needed
-    let fourPlayerOpponents = [...opponentCodes];
-    while (fourPlayerOpponents.length < 3) {
-      fourPlayerOpponents.push(opponentCodes[Math.floor(Math.random() * opponentCodes.length)]);
+    // Pad opponents to 3 if needed
+    let threeOpponents = [...opponentCodes];
+    while (threeOpponents.length < 3) {
+      threeOpponents.push(opponentCodes[Math.floor(Math.random() * opponentCodes.length)]);
     }
 
     // Run matches
     let wins = 0;
-    const opponentWins = {};
 
     for (let i = 0; i < matchCount; i++) {
-      // Randomly select 3 opponents from the list
+      // Randomly select 3 opponents
       const selectedOpponents = [];
       for (let j = 0; j < 3; j++) {
-        const opponent = fourPlayerOpponents[Math.floor(Math.random() * fourPlayerOpponents.length)];
+        const opponent = threeOpponents[Math.floor(Math.random() * threeOpponents.length)];
         selectedOpponents.push(opponent);
       }
 
       // Create 4-player match: agent at position 0, opponents at 1-3
       const agents = [agentCode, ...selectedOpponents];
-      const winner = runMultiWayMatch(agents);
+      const winner = runTexasHoldEmMatch(agents);
 
       if (winner === 0) {
         wins++;
-      }
-
-      // Track opponent wins (simplified - just count if they were position 1)
-      if (winner === 1) {
-        opponentWins["opponent_0"] = (opponentWins["opponent_0"] || 0) + 1;
       }
     }
 
@@ -273,7 +301,8 @@ export async function POST(request) {
       matchCount,
       winRate,
       message: `Agent won ${wins} out of ${matchCount} matches`,
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
+      gameType: "Texas Hold'em (4-player)"
     });
   } catch (error) {
     console.error("Multi-way test error:", error);

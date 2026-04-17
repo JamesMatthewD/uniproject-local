@@ -26,14 +26,6 @@ export default function HomePage() {
         <h2>Upload Custom Agents</h2>
         <p>Create and upload your own AI opponents.</p>
       </Link>
-
-      <section className="card">
-        <h2>API Endpoints</h2>
-        <ul>
-          <li>GET /api/health</li>
-          <li>POST /api/echo</li>
-        </ul>
-      </section>
     </main>
   );
 }
