@@ -23,7 +23,7 @@
 	"migrations" : [
 		{
 			"tag": "v1",
-			"new_classes": ["PokerGame"]
+			"new_sqlite_classes": ["PokerGame"]
 		}
 	],
 
