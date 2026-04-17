@@ -107,14 +107,22 @@ export default function MultiplayerPage() {
           body: JSON.stringify({ gameId }),
         });
         
+        // Only update state on successful responses
         if (response.ok) {
           const data = await response.json();
           if (data.gameState) {
             setGameState(data.gameState);
           }
+        } else if (response.status === 503) {
+          // Service temporarily unavailable - don't clear the state, just log it
+          console.warn(`Durable Object unavailable (503), keeping previous state`);
+        } else {
+          // Other errors - also keep previous state
+          console.error(`State fetch error: ${response.status}`);
         }
       } catch (err) {
-        console.error("State fetch error:", err);
+        console.error("State fetch network error:", err);
+        // Network error - keep previous state and retry
       }
     };
 
@@ -150,14 +158,21 @@ export default function MultiplayerPage() {
           body: JSON.stringify({ gameId: spectatorGameId }),
         });
 
+        // Only update state on successful responses
         if (response.ok) {
           const data = await response.json();
           if (data.gameState) {
             setSpectatorGameState(data.gameState);
           }
+        } else if (response.status === 503) {
+          // Service temporarily unavailable - don't clear the state
+          console.warn(`Spectator: Durable Object unavailable (503)`);
+        } else {
+          console.error(`Spectator state fetch error: ${response.status}`);
         }
       } catch (err) {
-        console.error("Spectator state fetch error:", err);
+        console.error("Spectator state fetch network error:", err);
+        // Keep previous state on network error
       }
     };
 
@@ -298,13 +313,25 @@ export default function MultiplayerPage() {
         }),
       });
 
-      if (!response.ok) throw new Error("Action failed");
+      if (response.status === 503) {
+        // Service unavailable - keep previous state, retry will happen
+        console.warn("Action: Durable Object unavailable, will retry");
+        return;
+      }
+
+      if (!response.ok) {
+        throw new Error(`Action failed: ${response.status}`);
+      }
 
       const data = await response.json();
-      setGameState(data.gameState);
-      setCurrentBet(0);
+      if (data.gameState) {
+        setGameState(data.gameState);
+        setCurrentBet(0);
+      }
     } catch (err) {
+      console.error("Action error:", err);
       setError(err.message);
+      // Don't clear game state on error
     }
   };
 
