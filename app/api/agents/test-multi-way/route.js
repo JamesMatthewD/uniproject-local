@@ -120,8 +120,10 @@ function runTexasHoldEmMatch(agentCodes) {
     let currentBet = streetIndex === 0 ? BIG_BLIND : 0;
     let firstToAct = (bigBlindPos + 1) % 4;
     let currentPlayer = streetIndex === 0 ? (smallBlindPos + 1) % 4 : firstToAct;
+    let maxIterations = 200; // Safety limit to prevent infinite loops
 
-    while (roundsWithoutChange < 4) {
+    while (roundsWithoutChange < 4 && maxIterations > 0) {
+      maxIterations--;
       const player = players[currentPlayer];
 
       // Skip folded players
@@ -157,6 +159,8 @@ function runTexasHoldEmMatch(agentCodes) {
       };
 
       try {
+        let didRaise = false;
+
         if (currentBet > player.lastBet && player.chips > 0) {
           // Player must fold, call, or raise
           const shouldFold = executeAgent(player.agentCode, gameInfo, "fold");
@@ -173,6 +177,7 @@ function runTexasHoldEmMatch(agentCodes) {
             currentBet += raiseAmount;
             player.lastBet = currentBet;
             roundsWithoutChange = 0;
+            didRaise = true;
           } else {
             const callAmount = Math.min(currentBet - player.lastBet, player.chips);
             player.chips -= callAmount;
@@ -180,24 +185,19 @@ function runTexasHoldEmMatch(agentCodes) {
             player.lastBet = currentBet;
             roundsWithoutChange++;
           }
-        } else if (player.chips > 0) {
-          const canCall = executeAgent(player.agentCode, gameInfo, "call");
-          
-          if (!canCall) {
-            const raiseResult = executeAgent(player.agentCode, gameInfo, "raise");
-            if (raiseResult.shouldRaise && raiseResult.amount > 0 && player.chips > 0) {
-              const raiseAmount = Math.min(raiseResult.amount, player.chips);
-              player.chips -= raiseAmount;
-              pot += raiseAmount;
-              currentBet += raiseAmount;
-              player.lastBet = currentBet;
-              roundsWithoutChange = 0;
-            }
-          } else if (currentBet > player.lastBet && player.chips > 0) {
-            const callAmount = Math.min(currentBet - player.lastBet, player.chips);
-            player.chips -= callAmount;
-            pot += callAmount;
+        } else {
+          // Player can check, call, or raise
+          const raiseResult = executeAgent(player.agentCode, gameInfo, "raise");
+          if (raiseResult.shouldRaise && raiseResult.amount > 0 && player.chips > 0) {
+            const raiseAmount = Math.min(raiseResult.amount, player.chips);
+            player.chips -= raiseAmount;
+            pot += raiseAmount;
+            currentBet += raiseAmount;
             player.lastBet = currentBet;
+            roundsWithoutChange = 0;
+            didRaise = true;
+          } else {
+            // Check or passive - just increment counter
             roundsWithoutChange++;
           }
         }
