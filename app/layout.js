@@ -1,8 +1,8 @@
 import "./globals.css";
 
 export const metadata = {
-  title: "UniProject",
-  description: "Basic Next.js fullstack starter"
+  title: "Poker AI Playground",
+  description: "University Project"
 };
 
 export default function RootLayout({ children }) {

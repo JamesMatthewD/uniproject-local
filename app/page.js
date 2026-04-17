@@ -22,6 +22,11 @@ export default function HomePage() {
         <p>Fast-paced poker with lower stakes and smaller tables.</p>
       </Link>
 
+      <Link href="/agents" className="card card-link">
+        <h2>Upload Custom Agents</h2>
+        <p>Create and upload your own AI opponents.</p>
+      </Link>
+
       <section className="card">
         <h2>API Endpoints</h2>
         <ul>

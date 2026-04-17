@@ -35,6 +35,14 @@
 			}
 		]
 	},
+
+	"d1_databases": [
+		{
+			"binding": "POKER_AGENTS_DB",
+			"database_name": "poker_agents",
+			"database_id": "e6e68547-33a9-4bc1-b87b-9a18ad3808e2"
+		}
+	],
 	
 	/**
 	 * Smart Placement

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
 import { getOpponentAction } from "@/app/opponents/opponentAI";
 import * as defaultOpponentModule from "@/app/opponents/example";
@@ -140,10 +140,92 @@ function buildToyPokerGameInfo(opponent, players, pot, currentBet) {
   };
 }
 
+/**
+ * Execute custom agent code in sandbox
+ * @private
+ */
+function executeCustomAgent(agentCode, gameInfo) {
+  try {
+    // Create a timeout wrapper
+    const timeoutPromise = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error("Agent execution timeout")), 500)
+    );
+
+    const executionPromise = (async () => {
+      // Create agent in isolated scope
+      const agentModule = new Function(
+        'return (function() { ' + agentCode + '; return exampleOpponent; })()'
+      )();
+
+      if (!agentModule || typeof agentModule !== "object") {
+        throw new Error("Agent did not export valid object");
+      }
+
+      // Validate required methods exist
+      if (typeof agentModule.call !== "function" ||
+          typeof agentModule.fold !== "function" ||
+          typeof agentModule.raise !== "function") {
+        throw new Error("Agent missing required methods");
+      }
+
+      // Execute with safe gameInfo copy (prevent mutation)
+      const safeGameInfo = JSON.parse(JSON.stringify(gameInfo));
+
+      // Call each method with try-catch
+      const canCall = (() => {
+        try {
+          return agentModule.call(safeGameInfo) ?? false;
+        } catch (e) {
+          return false;
+        }
+      })();
+
+      const shouldFold = (() => {
+        try {
+          return agentModule.fold(safeGameInfo) ?? false;
+        } catch (e) {
+          return false;
+        }
+      })();
+
+      const raiseResult = (() => {
+        try {
+          return agentModule.raise(safeGameInfo) ?? { shouldRaise: false, amount: 0 };
+        } catch (e) {
+          return { shouldRaise: false, amount: 0 };
+        }
+      })();
+
+      // Determine final action with fallback
+      let action = "check";
+      let amount = 0;
+
+      if (shouldFold) {
+        action = "fold";
+      } else if (raiseResult?.shouldRaise) {
+        action = "raise";
+        amount = Math.max(1, Math.min(raiseResult.amount || 0, 1000)); // Cap at 1000
+      } else if (canCall) {
+        action = "call";
+      }
+
+      return { action, amount };
+    })();
+
+    // Race: execution vs timeout
+    return Promise.race([executionPromise, timeoutPromise]);
+  } catch (err) {
+    console.error("Sandbox execution error:", err.message);
+    return { action: "check", amount: 0 }; // Safe fallback
+  }
+}
+
 export default function ToyPokerPage() {
   const [gameMode, setGameMode] = useState("room-select"); // "room-select", "playing", "spectating"
   const [selectedPlayer1AI, setSelectedPlayer1AI] = useState("");
   const [spectatorAIList, setSpectatorAIList] = useState([]);
+  const [uploadedAgents, setUploadedAgents] = useState([]);
+  const [useCustomAgent, setUseCustomAgent] = useState(false);
 
   const [players, setPlayers] = useState(() => {
     const initial = initialPlayers();
@@ -166,6 +248,18 @@ export default function ToyPokerPage() {
   const [spectatorPhase, setSpectatorPhase] = useState("betting");
   const [spectatorMessage, setSpectatorMessage] = useState("Ante posted. AI 1 is thinking...");
   const [spectatorAntagonistBet, setSpectatorAntagonistBet] = useState(null);
+
+  // Load uploaded agents from localStorage
+  useEffect(() => {
+    const saved = localStorage.getItem("uploadedAgents");
+    if (saved) {
+      try {
+        setUploadedAgents(JSON.parse(saved));
+      } catch (e) {
+        console.error("Failed to load uploaded agents:", e);
+      }
+    }
+  }, []);
 
   const you = players[0];
   const opponent = players[1];
@@ -198,6 +292,118 @@ export default function ToyPokerPage() {
     setGameMode("spectating");
   };
 
+  const startCustomAgentSpectator = async () => {
+    if (!selectedPlayer1AI) return;
+
+    const agent = uploadedAgents.find(a => a.id === selectedPlayer1AI);
+    if (!agent) return;
+
+    const availableAIs = getOpponentNames();
+    const randomAI = availableAIs[Math.floor(Math.random() * availableAIs.length)];
+    
+    setSpectatorAIList([selectedPlayer1AI, randomAI]);
+    
+    const initial = initialPlayers();
+    const dealt = dealHand(initial);
+    const refreshed = dealt.map((player) => ({
+      ...player,
+      chips: player.chips - ANTE,
+      name: player.id === 0 ? `Custom: ${agent.name}` : `AI: ${getOpponentDisplayName(randomAI)}`
+    }));
+
+    setSpectatorPlayers(refreshed);
+    setSpectatorPot(ANTE * 2);
+    setSpectatorPhase("betting");
+    setSpectatorMessage("Ante posted. Custom Agent is thinking...");
+    setSpectatorAntagonistBet(null);
+    setGameMode("spectating");
+
+    // Start game after short delay
+    setTimeout(() => {
+      processCustomAgentMove(refreshed, ANTE * 2, 0, null, agent.code);
+    }, 1000);
+  };
+
+  async function processCustomAgentMove(currentPlayers, currentPot, currentAntagonistBet, lastPlayerIndex, customAgentCode) {
+    if (spectatorPhase !== "betting") return;
+
+    const currentPlayerIndex = lastPlayerIndex === 0 ? 1 : 0;
+    const currentPlayer = currentPlayers[currentPlayerIndex];
+    const otherPlayer = currentPlayers[1 - currentPlayerIndex];
+
+    if (currentPlayer.folded) {
+      spectatorResolveHand(currentPlayers, currentPot);
+      return;
+    }
+
+    const gameInfo = buildToyPokerGameInfo(currentPlayer, currentPlayers, currentPot, currentAntagonistBet);
+    
+    let decision;
+    
+    if (currentPlayerIndex === 0) {
+      // Custom agent's turn
+      decision = await executeCustomAgent(customAgentCode, gameInfo);
+      var playerDisplayName = `Custom Agent`;
+    } else {
+      // Built-in AI's turn
+      const aiName = spectatorAIList[currentPlayerIndex];
+      const selectedOpponentModule = getOpponentByName(aiName);
+      decision = getOpponentAction(selectedOpponentModule?.exampleOpponent, gameInfo);
+      playerDisplayName = `AI: ${getOpponentDisplayName(aiName)}`;
+    }
+
+    if (decision.action === "fold") {
+      setSpectatorMessage(`${playerDisplayName} folded. Other player wins!`);
+      const nextPlayers = currentPlayers.map((p, idx) =>
+        idx === currentPlayerIndex ? { ...p, folded: true } : p
+      );
+      setSpectatorPlayers(nextPlayers);
+      setSpectatorPhase("result");
+      return;
+    }
+
+    if (lastPlayerIndex === null) {
+      // First move (custom agent acts first)
+      if (decision.action === "raise" || decision.action === "call") {
+        const betAmount = decision.amount || 10;
+        setSpectatorMessage(`${playerDisplayName} raised ${betAmount}. Other AI is deciding...`);
+        setSpectatorAntagonistBet(betAmount);
+
+        setTimeout(() => {
+          processCustomAgentMove(currentPlayers, currentPot + betAmount, betAmount, 0, customAgentCode);
+        }, 1000);
+      } else {
+        setSpectatorMessage(`${playerDisplayName} checked.`);
+        setTimeout(() => {
+          processCustomAgentMove(currentPlayers, currentPot, 0, 0, customAgentCode);
+        }, 1000);
+      }
+    } else if (currentPlayerIndex === 1 && lastPlayerIndex === 0) {
+      // Built-in AI responding to custom agent
+      if (decision.action === "fold") {
+        setSpectatorMessage(`${playerDisplayName} folded!`);
+        const nextPlayers = currentPlayers.map((p, idx) =>
+          idx === 1 ? { ...p, folded: true } : p
+        );
+        setSpectatorPlayers(nextPlayers);
+        setSpectatorPhase("result");
+      } else {
+        // Built-in AI calls
+        const potIncrease = Math.min(currentPlayer.chips, currentAntagonistBet);
+        const nextPlayers = currentPlayers.map((p, idx) =>
+          idx === 1 ? { ...p, chips: p.chips - potIncrease } : p
+        );
+        setSpectatorPlayers(nextPlayers);
+        setSpectatorMessage("Both players called. Revealing cards...");
+        setSpectatorPhase("result");
+
+        setTimeout(() => {
+          spectatorResolveHand(nextPlayers, currentPot + potIncrease);
+        }, 1500);
+      }
+    }
+  }
+
   function startNewHand() {
     const initial = initialPlayers();
     const dealt = dealHand(initial);
@@ -217,20 +423,30 @@ export default function ToyPokerPage() {
   function startNewSpectatorHand() {
     const initial = initialPlayers();
     const dealt = dealHand(initial);
+    
+    // Get the custom agent code if using custom agent
+    const customAgent = useCustomAgent ? uploadedAgents.find(a => a.id === selectedPlayer1AI) : null;
+    
     const refreshed = dealt.map((player) => ({
       ...player,
       chips: player.chips - ANTE,
-      name: spectatorAIList[player.id] ? `AI: ${getOpponentDisplayName(spectatorAIList[player.id])}` : player.name
+      name: spectatorAIList[player.id] 
+        ? (player.id === 0 && customAgent ? `Custom: ${customAgent.name}` : `AI: ${getOpponentDisplayName(spectatorAIList[player.id])}`)
+        : player.name
     }));
 
     setSpectatorPlayers(refreshed);
     setSpectatorPot(ANTE * 2);
     setSpectatorPhase("betting");
-    setSpectatorMessage("Ante posted. AI 1 is thinking...");
+    setSpectatorMessage(useCustomAgent ? "Ante posted. Custom Agent is thinking..." : "Ante posted. AI 1 is thinking...");
     setSpectatorAntagonistBet(null);
 
     setTimeout(() => {
-      processSpectatorMove(refreshed, ANTE * 2, 0, null);
+      if (useCustomAgent && customAgent) {
+        processCustomAgentMove(refreshed, ANTE * 2, 0, null, customAgent.code);
+      } else {
+        processSpectatorMove(refreshed, ANTE * 2, 0, null);
+      }
     }, 1000);
   }
 
@@ -425,7 +641,7 @@ export default function ToyPokerPage() {
     return (
       <main className="container">
         <h1>Toy Poker - High Card</h1>
-        <p>Play against an AI opponent or watch two AIs battle.</p>
+        <p>Play against an AI opponent or watch AIs and custom agents battle.</p>
 
         <div className="room-selector">
           <div className="card">
@@ -444,8 +660,11 @@ export default function ToyPokerPage() {
                 Player 1 AI:
               </label>
               <select
-                value={selectedPlayer1AI}
-                onChange={(e) => setSelectedPlayer1AI(e.target.value)}
+                value={useCustomAgent ? "" : selectedPlayer1AI}
+                onChange={(e) => {
+                  setSelectedPlayer1AI(e.target.value);
+                  setUseCustomAgent(false);
+                }}
                 style={{
                   width: "100%",
                   padding: "0.5rem",
@@ -466,7 +685,52 @@ export default function ToyPokerPage() {
             <button
               onClick={startSpectatorGame}
               className="primary-button"
-              disabled={!selectedPlayer1AI}
+              disabled={useCustomAgent || !selectedPlayer1AI}
+              style={{ marginTop: "0.75rem" }}
+            >
+              Start Spectating
+            </button>
+          </div>
+
+          <div className="card">
+            <h2>Watch Custom Agent</h2>
+            <p>Watch your uploaded custom agent vs a random built-in AI.</p>
+            <div style={{ marginTop: "0.75rem" }}>
+              <label style={{ display: "block", marginBottom: "0.25rem", fontSize: "0.9rem" }}>
+                Custom Agent:
+              </label>
+              <select
+                value={useCustomAgent ? selectedPlayer1AI : ""}
+                onChange={(e) => {
+                  setSelectedPlayer1AI(e.target.value);
+                  setUseCustomAgent(true);
+                }}
+                style={{
+                  width: "100%",
+                  padding: "0.5rem",
+                  borderRadius: "4px",
+                  border: "1px solid #4b5563",
+                  background: "#111827",
+                  color: "#fff"
+                }}
+              >
+                <option value="">Select Custom Agent...</option>
+                {uploadedAgents.map(agent => (
+                  <option key={agent.id} value={agent.id}>
+                    {agent.name} (ID: {agent.id?.substring(0, 12)}...)
+                  </option>
+                ))}
+              </select>
+              {uploadedAgents.length === 0 && (
+                <p style={{ fontSize: "0.85rem", color: "#9ca3af", marginTop: "0.5rem" }}>
+                  No custom agents uploaded. <Link href="/agents" style={{ color: "#60a5fa" }}>Upload one here</Link>.
+                </p>
+              )}
+            </div>
+            <button
+              onClick={startCustomAgentSpectator}
+              className="primary-button"
+              disabled={!useCustomAgent || !selectedPlayer1AI || uploadedAgents.length === 0}
               style={{ marginTop: "0.75rem" }}
             >
               Start Spectating
@@ -490,7 +754,7 @@ export default function ToyPokerPage() {
 
           .room-selector {
             display: grid;
-            grid-template-columns: 1fr 1fr;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
             gap: 1.5rem;
             margin: 2rem 0;
           }
@@ -504,6 +768,10 @@ export default function ToyPokerPage() {
 
           .card h2 {
             margin-top: 0;
+          }
+
+          .card p {
+            color: #cbd5e1;
           }
 
           .primary-button {

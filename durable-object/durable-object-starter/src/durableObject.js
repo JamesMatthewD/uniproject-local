@@ -168,6 +168,110 @@ export class PokerGame {
     this.connections = new Set();
     this.handCompleteTime = null; // Timestamp when hand completed
     this.maxBetThisStreet = 0; // Track highest bet this street for check validation
+    this.agentCache = new Map(); // Cache for loaded agents
+  }
+
+  /**
+   * Safely execute custom agent code with sandboxing
+   * @private
+   */
+  async executeCustomAgent(agentId, gameInfo) {
+    try {
+      // Check cache first
+      if (this.agentCache.has(agentId)) {
+        const agent = this.agentCache.get(agentId);
+        return this._runAgentInSandbox(agent, gameInfo);
+      }
+
+      // Fetch from D1 if not cached
+      const result = await this.getAgentFromDB(agentId);
+      if (!result) {
+        console.warn(`Agent ${agentId} not found in database`);
+        return null;
+      }
+
+      // Cache for future use
+      this.agentCache.set(agentId, result.code);
+
+      return this._runAgentInSandbox(result.code, gameInfo);
+    } catch (err) {
+      console.error(`Error executing custom agent ${agentId}:`, err.message);
+      return null;
+    }
+  }
+
+  /**
+   * Run agent code in sandbox with timeout and error handling
+   * @private
+   */
+  _runAgentInSandbox(agentCode, gameInfo) {
+    try {
+      // Create a timeout wrapper
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("Agent execution timeout")), 500)
+      );
+
+      const executionPromise = (async () => {
+        // Create agent in isolated scope
+        const agentModule = new Function(
+          'return (function() { ' + agentCode + '; return exampleOpponent; })()'
+        )();
+
+        if (!agentModule || typeof agentModule !== "object") {
+          throw new Error("Agent did not export valid object");
+        }
+
+        // Validate required methods exist
+        if (typeof agentModule.call !== "function" ||
+            typeof agentModule.fold !== "function" ||
+            typeof agentModule.raise !== "function") {
+          throw new Error("Agent missing required methods");
+        }
+
+        // Execute with safe gameInfo copy (prevent mutation)
+        const safeGameInfo = JSON.parse(JSON.stringify(gameInfo));
+
+        // Call each method with try-catch
+        const canCall = this._safeCall(() => agentModule.call(safeGameInfo), false);
+        const shouldFold = this._safeCall(() => agentModule.fold(safeGameInfo), false);
+        const raiseResult = this._safeCall(() => agentModule.raise(safeGameInfo), { shouldRaise: false, amount: 0 });
+
+        // Determine final action with fallback
+        let action = "check";
+        let amount = 0;
+
+        if (shouldFold) {
+          action = "fold";
+        } else if (raiseResult?.shouldRaise) {
+          action = "raise";
+          amount = Math.max(1, Math.min(raiseResult.amount || 0, 1000)); // Cap at 1000
+        } else if (canCall) {
+          action = "call";
+        }
+
+        return { action, amount };
+      })();
+
+      // Race: execution vs timeout
+      return Promise.race([executionPromise, timeoutPromise]);
+    } catch (err) {
+      console.error("Sandbox execution error:", err.message);
+      return { action: "check", amount: 0 }; // Safe fallback
+    }
+  }
+
+  /**
+   * Safely call agent functions with error handling
+   * @private
+   */
+  _safeCall(fn, defaultValue) {
+    try {
+      const result = fn();
+      return result ?? defaultValue;
+    } catch (err) {
+      console.error("Agent function error:", err.message);
+      return defaultValue;
+    }
   }
 
   async fetch(request) {
@@ -190,6 +294,8 @@ export class PokerGame {
           return this.handleJoinRequest(body);
         } else if (action === "/action") {
           return this.handleActionRequest(body);
+        } else if (action === "/saveAgent") {
+          return this.handleSaveAgent(body);
         }
       }
       
@@ -648,5 +754,77 @@ export class PokerGame {
       [copy[i], copy[j]] = [copy[j], copy[i]];
     }
     return copy;
+  }
+
+  /**
+   * Save agent code to D1 database
+   * Returns the agent ID on success
+   */
+  async handleSaveAgent(data) {
+    try {
+      const { name, code } = data;
+
+      if (!name || !code) {
+        return new Response(
+          JSON.stringify({ error: "Missing name or code" }),
+          { status: 400, headers: { "Content-Type": "application/json" } }
+        );
+      }
+
+      if (!this.env.POKER_AGENTS_DB) {
+        return new Response(
+          JSON.stringify({ error: "Database not configured" }),
+          { status: 500, headers: { "Content-Type": "application/json" } }
+        );
+      }
+
+      // Generate unique agent ID
+      const agentId = `agent_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+      // Insert into D1 database
+      await this.env.POKER_AGENTS_DB
+        .prepare(
+          "INSERT INTO agents (id, name, code, created_at) VALUES (?, ?, ?, datetime('now'))"
+        )
+        .bind(agentId, name, code)
+        .run();
+
+      return new Response(
+        JSON.stringify({
+          success: true,
+          agentId: agentId,
+          message: "Agent saved successfully"
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
+    } catch (error) {
+      console.error("Save agent error:", error);
+      return new Response(
+        JSON.stringify({ error: error.message }),
+        { status: 500, headers: { "Content-Type": "application/json" } }
+      );
+    }
+  }
+
+  /**
+   * Retrieve agent code from D1 database by ID
+   */
+  async getAgentFromDB(agentId) {
+    try {
+      if (!this.env.POKER_AGENTS_DB) {
+        console.warn("D1 database not configured");
+        return null;
+      }
+
+      const result = await this.env.POKER_AGENTS_DB
+        .prepare("SELECT id, name, code FROM agents WHERE id = ? LIMIT 1")
+        .bind(agentId)
+        .first();
+
+      return result;
+    } catch (error) {
+      console.error(`Error fetching agent ${agentId}:`, error);
+      return null;
+    }
   }
 }

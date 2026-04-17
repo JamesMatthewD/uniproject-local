@@ -1,16 +1,12 @@
-/**
- * Example Opponent Decision Tree
- * 
- * This is a template for creating custom opponent AI.
- * Implement the three decision functions below to define opponent behavior.
- * 
+/** 
  * Each function receives gameInfo with:
  * - myCards: [card1, card2] (e.g., ["A-H", "K-D"])
+ * - Cards are formatted as "Rank-Suit"
  * - myChips: number (remaining chips)
  * - boardCards: [card1, card2, ...] (0-5 cards depending on street)
  * - potSize: number
  * - currentBet: number (amount needed to call)
- * - street: string ("pre-flop", "flop", "turn", "river", "final-bet")
+ * - street: string ("pre-flop", "flop", "turn", "river")
  * - myPosition: number (0 = small blind, 1 = big blind)
  * - opponentChips: number (opponent's remaining chips)
  */
