@@ -9,8 +9,8 @@ export async function POST(request) {
       );
     }
 
-    // Forward to Durable Object running on localhost:8787
-    const durableObjectUrl = `http://localhost:8787/poker/${gameId}`;
+    // Determine if we're in production (Cloudflare) or development (localhost)
+    const durableObjectUrl = process.env.DURABLE_OBJECT_URL || `http://localhost:8787/poker/${gameId}`;
     
     try {
       const doResponse = await fetch(durableObjectUrl, {

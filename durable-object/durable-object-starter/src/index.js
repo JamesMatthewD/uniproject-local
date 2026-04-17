@@ -53,7 +53,14 @@ export default {
 		if (url.pathname.startsWith('/poker')) {
 			const gameId = url.pathname.split('/')[2] || 'default';
 			
-			// Get or create game instance
+			// In production: use the Durable Object binding
+			if (env.POKER_GAME) {
+				const id = env.POKER_GAME.idFromName(gameId);
+				const obj = env.POKER_GAME.get(id);
+				return obj.fetch(request);
+			}
+			
+			// In development: use in-memory game instances
 			if (!games.has(gameId)) {
 				games.set(gameId, new PokerGame({}, env));
 			}
