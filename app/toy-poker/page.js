@@ -152,9 +152,14 @@ function executeCustomAgent(agentCode, gameInfo) {
     );
 
     const executionPromise = (async () => {
+      // Remove export keyword to make it compatible with new Function()
+      const codeWithoutExport = agentCode
+        .replace(/^\s*export\s+default\s+/m, "")
+        .replace(/^\s*export\s+(const|let|var|function)\s+/m, "$1 ");
+
       // Create agent in isolated scope
       const agentModule = new Function(
-        'return (function() { ' + agentCode + '; return exampleOpponent; })()'
+        'return (function() { ' + codeWithoutExport + '; return exampleOpponent; })()'
       )();
 
       if (!agentModule || typeof agentModule !== "object") {
@@ -257,6 +262,41 @@ export default function ToyPokerPage() {
         setUploadedAgents(JSON.parse(saved));
       } catch (e) {
         console.error("Failed to load uploaded agents:", e);
+      }
+    }
+
+    // Check for spectator agents to auto-start
+    const spectatorData = localStorage.getItem("spectatorAgents");
+    if (spectatorData) {
+      try {
+        const agents = JSON.parse(spectatorData);
+        // Auto-start spectator game with these agents
+        setGameMode("spectating");
+        
+        const initial = initialPlayers();
+        const dealt = dealHand(initial);
+        const refreshed = dealt.map((player) => ({
+          ...player,
+          chips: player.chips - ANTE,
+          name: player.id === 0 ? `Custom: ${agents.agent1Name}` : `Custom: ${agents.agent2Name}`
+        }));
+
+        setSpectatorPlayers(refreshed);
+        setSpectatorAIList([agents.agent1Id, agents.agent2Id]);
+        setSpectatorPot(ANTE * 2);
+        setSpectatorPhase("betting");
+        setSpectatorMessage("Ante posted. Agents are thinking...");
+        setSpectatorAntagonistBet(null);
+
+        // Start the match after a short delay
+        setTimeout(() => {
+          processCustomAgentMatchup(refreshed, ANTE * 2, 0, null, agents.agent1Code, agents.agent2Code);
+        }, 1000);
+
+        // Clear the spectator data after loading
+        localStorage.removeItem("spectatorAgents");
+      } catch (e) {
+        console.error("Failed to load spectator agents:", e);
       }
     }
   }, []);
@@ -400,6 +440,87 @@ export default function ToyPokerPage() {
         setTimeout(() => {
           spectatorResolveHand(nextPlayers, currentPot + potIncrease);
         }, 1500);
+      }
+    }
+  }
+
+  async function processCustomAgentMatchup(currentPlayers, currentPot, currentAntagonistBet, lastPlayerIndex, agent1Code, agent2Code) {
+    if (spectatorPhase !== "betting") return;
+
+    const currentPlayerIndex = lastPlayerIndex === 0 ? 1 : 0;
+    const currentPlayer = currentPlayers[currentPlayerIndex];
+    const otherPlayer = currentPlayers[1 - currentPlayerIndex];
+
+    if (currentPlayer.folded) {
+      spectatorResolveHand(currentPlayers, currentPot);
+      return;
+    }
+
+    const gameInfo = buildToyPokerGameInfo(currentPlayer, currentPlayers, currentPot, currentAntagonistBet);
+    
+    let decision;
+    let playerDisplayName;
+    let agentCode;
+    
+    if (currentPlayerIndex === 0) {
+      // Agent 1's turn
+      agentCode = agent1Code;
+      decision = await executeCustomAgent(agentCode, gameInfo);
+      playerDisplayName = `Custom: ${spectatorPlayers[0]?.name?.split(": ")[1] || "Agent 1"}`;
+    } else {
+      // Agent 2's turn
+      agentCode = agent2Code;
+      decision = await executeCustomAgent(agentCode, gameInfo);
+      playerDisplayName = `Custom: ${spectatorPlayers[1]?.name?.split(": ")[1] || "Agent 2"}`;
+    }
+
+    if (decision.action === "fold") {
+      setSpectatorMessage(`${playerDisplayName} folded. Other player wins!`);
+      const nextPlayers = currentPlayers.map((p, idx) =>
+        idx === currentPlayerIndex ? { ...p, folded: true } : p
+      );
+      setSpectatorPlayers(nextPlayers);
+      setSpectatorPhase("result");
+      return;
+    }
+
+    if (lastPlayerIndex === null) {
+      // First move (agent 1 acts first)
+      if (decision.action === "raise" || decision.action === "call") {
+        const betAmount = decision.amount || 10;
+        setSpectatorMessage(`${playerDisplayName} raised ${betAmount}. Agent 2 is deciding...`);
+        setSpectatorAntagonistBet(betAmount);
+
+        setTimeout(() => {
+          processCustomAgentMatchup(currentPlayers, currentPot + betAmount, betAmount, 0, agent1Code, agent2Code);
+        }, 1000);
+      } else {
+        setSpectatorMessage(`${playerDisplayName} checked.`);
+        setTimeout(() => {
+          processCustomAgentMatchup(currentPlayers, currentPot, 0, 0, agent1Code, agent2Code);
+        }, 1000);
+      }
+    } else if (currentPlayerIndex === 1 && lastPlayerIndex === 0) {
+      // Agent 2 responding to agent 1
+      if (decision.action === "raise" || decision.action === "call") {
+        const potIncrease = Math.min(currentPlayer.chips, currentAntagonistBet);
+        const nextPlayers = currentPlayers.map((p, idx) =>
+          idx === 1 ? { ...p, chips: p.chips - potIncrease } : p
+        );
+        setSpectatorPlayers(nextPlayers);
+        setSpectatorMessage("Both players called. Revealing cards...");
+        setSpectatorPhase("result");
+
+        setTimeout(() => {
+          spectatorResolveHand(nextPlayers, currentPot + potIncrease);
+        }, 1500);
+      } else {
+        setSpectatorMessage(`${playerDisplayName} folded!`);
+        const nextPlayers = currentPlayers.map((p, idx) =>
+          idx === 1 ? { ...p, folded: true } : p
+        );
+        setSpectatorPlayers(nextPlayers);
+        setSpectatorPhase("result");
       }
     }
   }

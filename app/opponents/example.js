@@ -9,6 +9,7 @@
  * - street: string ("pre-flop", "flop", "turn", "river")
  * - myPosition: number (0 = small blind, 1 = big blind)
  * - opponentChips: number (opponent's remaining chips)
+ * - The first line must be the same to validate
  */
 
 export const exampleOpponent = {
