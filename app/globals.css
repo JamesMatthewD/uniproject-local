@@ -45,6 +45,62 @@ body {
   box-shadow: 0 10px 24px rgba(2, 6, 23, 0.45);
 }
 
+.split-button-container {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0;
+  margin-top: 1.5rem;
+  border: 1px solid #334155;
+  border-radius: 10px;
+  overflow: hidden;
+  background: #111827;
+}
+
+.split-button {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  padding: 1rem 1.25rem;
+  text-decoration: none;
+  color: inherit;
+  border: none;
+  border-right: 1px solid #334155;
+  transition: background-color 0.15s ease, transform 0.15s ease;
+  cursor: pointer;
+}
+
+.split-button:last-child {
+  border-right: none;
+}
+
+.split-button h2 {
+  margin: 0 0 0.5rem 0;
+  font-size: 1.25rem;
+}
+
+.split-button p {
+  margin: 0;
+  font-size: 0.875rem;
+  color: #9ca3af;
+}
+
+.split-button:hover,
+.split-button:focus-visible {
+  background-color: #1f2937;
+  transform: none;
+}
+
+.split-button-left:hover,
+.split-button-left:focus-visible {
+  background-color: rgba(59, 130, 246, 0.1);
+}
+
+.split-button-right:hover,
+.split-button-right:focus-visible {
+  background-color: rgba(34, 197, 94, 0.1);
+}
+
 .back-link {
   display: inline-block;
   margin-top: 1rem;

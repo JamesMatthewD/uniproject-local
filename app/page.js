@@ -3,13 +3,19 @@ import Link from "next/link";
 export default function HomePage() {
   return (
     <main className="container">
-      <h1>UniProject Next.js Starter</h1>
-      <p>This app includes a frontend and backend API routes.</p>
+      <h1>Texas Hold'Em Poker</h1>
+      <p>Play poker against AI or compete with other players online.</p>
 
-      <Link href="/ingame" className="card card-link">
-        <h2>Go To Ingame Page</h2>
-        <p>Click this card to open another page in the app.</p>
-      </Link>
+      <div className="split-button-container">
+        <Link href="/ingame" className="split-button split-button-left">
+          <h2>vs AI</h2>
+          <p>Play against computer opponents</p>
+        </Link>
+        <Link href="/multiplayer" className="split-button split-button-right">
+          <h2>Play Online</h2>
+          <p>Compete with other players</p>
+        </Link>
+      </div>
 
       <Link href="/toy-poker" className="card card-link">
         <h2>Play Toy Poker</h2>
