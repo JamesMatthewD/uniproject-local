@@ -1,19 +1,21 @@
 export async function POST(request) {
   try {
-    const { gameId, playerId, playerName } = await request.json();
+    const { gameId } = await request.json();
+
+    if (!gameId) {
+      return Response.json(
+        { error: "gameId required" },
+        { status: 400 }
+      );
+    }
 
     // Forward to Durable Object running on localhost:8787
     const durableObjectUrl = `http://localhost:8787/poker/${gameId}`;
     
     try {
       const doResponse = await fetch(durableObjectUrl, {
-        method: "POST",
+        method: "GET",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          path: "/join",
-          playerId,
-          playerName,
-        }),
       });
       
       if (!doResponse.ok) {
@@ -21,23 +23,13 @@ export async function POST(request) {
       }
 
       const doData = await doResponse.json();
-      return Response.json({ gameId, gameState: doData.gameState || doData });
+      return Response.json({ gameState: doData.gameState || doData });
     } catch (doError) {
-      console.error("Failed to connect to Durable Object:", doError);
-      console.log("Falling back to mock data - is Durable Object running on 8787?");
+      console.error("Failed to get state from Durable Object:", doError);
+      // Return empty state if Durable Object unavailable
       return Response.json({
-        gameId,
         gameState: {
-          gameId,
-          players: [
-            {
-              id: playerId,
-              name: playerName,
-              chips: 1000,
-              cards: [],
-              folded: false,
-            },
-          ],
+          players: [],
           board: [],
           currentStreet: "lobby",
           pot: 0,

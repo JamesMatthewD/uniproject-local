@@ -1,34 +1,58 @@
 export async function POST(request) {
   try {
     const { playerId, playerName } = await request.json();
-
-    // Generate a unique game ID
     const gameId = `game_${Math.random().toString(36).substr(2, 9)}`;
 
-    // In production, this would call your Cloudflare Durable Object
-    // Example: const durableObject = env.POKER_GAMES.get(new URL(`https://poker/${gameId}`));
-    // For now, we'll return a response structure
+    // Forward to Durable Object running on localhost:8787
+    const durableObjectUrl = `http://localhost:8787/poker/${gameId}`;
+    
+    try {
+      const doResponse = await fetch(durableObjectUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          path: "/join",
+          playerId,
+          playerName,
+        }),
+      });
+      
+      if (!doResponse.ok) {
+        throw new Error(`Durable Object error: ${doResponse.status}`);
+      }
 
-    const gameState = {
-      gameId,
-      players: [
-        {
-          id: playerId,
-          name: playerName,
-          chips: 1000,
-          cards: [],
-          folded: false,
-          isDealer: true,
+      const doData = await doResponse.json();
+      
+      // Return with gameId for client reference
+      return Response.json({ 
+        gameId, 
+        gameState: doData.gameState || doData 
+      });
+    } catch (doError) {
+      console.error("Failed to connect to Durable Object:", doError);
+      // Return mock data if Durable Object unavailable
+      console.log("Falling back to mock data - is Durable Object running on 8787?");
+      return Response.json({
+        gameId,
+        gameState: {
+          gameId,
+          players: [
+            {
+              id: playerId,
+              name: playerName,
+              chips: 1000,
+              cards: [],
+              folded: false,
+            },
+          ],
+          board: [],
+          currentStreet: "lobby",
+          pot: 0,
+          status: "waiting_for_players",
+          handNumber: 0,
         },
-      ],
-      board: [],
-      currentStreet: "lobby",
-      pot: 0,
-      status: "waiting_for_players",
-      createdAt: new Date().toISOString(),
-    };
-
-    return Response.json({ gameId, gameState });
+      });
+    }
   } catch (error) {
     return Response.json(
       { error: error.message },

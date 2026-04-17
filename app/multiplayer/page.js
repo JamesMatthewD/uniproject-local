@@ -6,6 +6,62 @@ import Link from "next/link";
 const STARTING_CHIPS = 1000;
 const POKER_TABLE_SEATS = 6; // Number of seats at the table
 
+// Convert card format from "2-H" to "2_of_hearts.png"
+function getCardImagePath(card) {
+  if (!card) return null;
+  
+  const [rank, suit] = card.split("-");
+  
+  const rankMap = {
+    "2": "2", "3": "3", "4": "4", "5": "5", "6": "6", "7": "7", "8": "8", "9": "9", "10": "10",
+    "J": "jack", "Q": "queen", "K": "king", "A": "ace"
+  };
+  
+  const suitMap = {
+    "H": "hearts",
+    "D": "diamonds",
+    "C": "clubs",
+    "S": "spades"
+  };
+  
+  const mappedRank = rankMap[rank];
+  const mappedSuit = suitMap[suit];
+  
+  if (!mappedRank || !mappedSuit) return null;
+  
+  return `/cards/${mappedRank}_of_${mappedSuit}.png`;
+}
+
+// Card image component
+function CardImage({ card, isHidden = false, size = "medium" }) {
+  const imagePath = getCardImagePath(card);
+  
+  const sizes = {
+    small: { width: "35px", height: "50px" },
+    medium: { width: "50px", height: "70px" },
+    large: { width: "80px", height: "110px" }
+  };
+  
+  if (isHidden || !imagePath) {
+    return (
+      <div className="card-placeholder" style={sizes[size]}>
+        ?
+      </div>
+    );
+  }
+  
+  return (
+    <img 
+      src={imagePath} 
+      alt={card}
+      style={{ ...sizes[size], borderRadius: "4px" }}
+      onError={(e) => {
+        e.target.style.display = "none";
+      }}
+    />
+  );
+}
+
 export default function MultiplayerPage() {
   const [gameState, setGameState] = useState(null);
   const [playerId, setPlayerId] = useState(null);
@@ -18,6 +74,7 @@ export default function MultiplayerPage() {
   const [currentBet, setCurrentBet] = useState(0);
   const [gameStarted, setGameStarted] = useState(false);
   const [playerSeatIndex, setPlayerSeatIndex] = useState(null);
+  const [pollInterval, setPollInterval] = useState(null);
 
   // Initialize with room selection
   useEffect(() => {
@@ -25,6 +82,39 @@ export default function MultiplayerPage() {
     setPlayerId(newPlayerId);
     setLoading(false);
   }, []);
+
+  // Poll for game state updates
+  useEffect(() => {
+    if (!gameStarted || !gameId || !playerId) return;
+
+    // Immediately fetch state when game starts
+    const fetchState = async () => {
+      try {
+        const response = await fetch("/api/poker/state", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ gameId }),
+        });
+        
+        if (response.ok) {
+          const data = await response.json();
+          if (data.gameState) {
+            setGameState(data.gameState);
+          }
+        }
+      } catch (err) {
+        console.error("State fetch error:", err);
+      }
+    };
+
+    // Fetch immediately
+    fetchState();
+
+    // Then poll every 500ms
+    const interval = setInterval(fetchState, 500);
+
+    return () => clearInterval(interval);
+  }, [gameStarted, gameId, playerId]);
 
   const createGame = async () => {
     if (!playerId) return;
@@ -43,21 +133,7 @@ export default function MultiplayerPage() {
 
       const data = await response.json();
       setGameId(data.gameId);
-      setGameState({
-        players: [
-          {
-            id: playerId,
-            name: `Player ${playerId.slice(-4)}`,
-            chips: STARTING_CHIPS,
-            cards: [],
-            folded: false,
-          },
-        ],
-        board: [],
-        currentStreet: "lobby",
-        pot: 0,
-        status: "waiting",
-      });
+      setGameState(data.gameState); // Use the actual game state from the Durable Object
       setPlayerSeatIndex(0);
       setIsConnected(true);
       setGameStarted(true);
@@ -90,6 +166,51 @@ export default function MultiplayerPage() {
       setPlayerSeatIndex(data.gameState?.players?.length || 0);
       setIsConnected(true);
       setGameStarted(true);
+      setLoading(false);
+    } catch (err) {
+      setError(err.message);
+      setLoading(false);
+    }
+  };
+
+  const randomQueue = async () => {
+    if (!playerId) return;
+    try {
+      setLoading(true);
+      
+      // Get list of available games
+      const availableResponse = await fetch("/api/poker/available");
+      const availableData = await availableResponse.json();
+      const availableGames = availableData.games || [];
+      
+      let selectedGameId = null;
+      
+      // Prioritize existing non-full rooms
+      if (availableGames.length > 0) {
+        // Sort by most full first (highest player count)
+        const sortedGames = availableGames.sort((a, b) => b.playerCount - a.playerCount);
+        selectedGameId = sortedGames[0].gameId;
+      } else {
+        // Create new game if no rooms available
+        const createResponse = await fetch("/api/poker/create", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            playerId,
+            playerName: `Player ${playerId.slice(-4)}`,
+          }),
+        });
+
+        if (!createResponse.ok) throw new Error("Failed to create game");
+        const createData = await createResponse.json();
+        selectedGameId = createData.gameId;
+      }
+      
+      // Join the selected game
+      if (selectedGameId) {
+        await joinGame(selectedGameId);
+      }
+      
       setLoading(false);
     } catch (err) {
       setError(err.message);
@@ -130,6 +251,40 @@ export default function MultiplayerPage() {
     return gameState?.players?.[seatIndex] || null;
   };
 
+  const getCurrentActingPlayer = () => {
+    const playerArray = gameState?.players || [];
+    if (playerArray.length === 0) return null;
+    const index = gameState?.currentPlayerIndex || 0;
+    return playerArray[index % playerArray.length];
+  };
+
+  const isDealerPosition = (seatIndex) => {
+    return seatIndex === gameState?.dealerPosition;
+  };
+
+  const isActingPlayer = (playerId) => {
+    return getCurrentActingPlayer()?.id === playerId;
+  };
+
+  const canPlayerAct = () => {
+    return isActingPlayer(playerId);
+  };
+
+  const canCheck = () => {
+    // Can only check if player's current bet equals the max bet this street
+    const currentPlayer = gameState?.players?.find(p => p.id === playerId);
+    if (!currentPlayer) return false;
+    return currentPlayer.currentBet === gameState?.maxBetThisStreet;
+  };
+
+  const getCallAmount = () => {
+    // Returns the amount needed to call
+    const currentPlayer = gameState?.players?.find(p => p.id === playerId);
+    if (!currentPlayer) return 0;
+    const needed = (gameState?.maxBetThisStreet || 0) - (currentPlayer?.currentBet || 0);
+    return Math.max(0, needed);
+  };
+
   const getSeatPosition = (index) => {
     // Calculate circular seat positions around table
     const angle = (index / POKER_TABLE_SEATS) * 2 * Math.PI;
@@ -147,6 +302,14 @@ export default function MultiplayerPage() {
         <p>Join a game or create a new one to get started.</p>
 
         <div className="room-selector">
+          <div className="card">
+            <h2>Random Queue</h2>
+            <p>Join an existing game or create a new one automatically.</p>
+            <button onClick={randomQueue} className="primary-button queue-button">
+              Find Game
+            </button>
+          </div>
+
           <div className="card">
             <h2>Create New Game</h2>
             <p>Start a new poker room and share the code with friends.</p>
@@ -182,9 +345,17 @@ export default function MultiplayerPage() {
         <style jsx>{`
           .room-selector {
             display: grid;
-            grid-template-columns: 1fr 1fr;
+            grid-template-columns: 1fr 1fr 1fr;
             gap: 1.5rem;
             margin: 2rem 0;
+          }
+
+          .queue-button {
+            background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+          }
+
+          .queue-button:hover:not(:disabled) {
+            background: linear-gradient(135deg, #059669 0%, #047857 100%);
           }
 
           .primary-button {
@@ -225,6 +396,12 @@ export default function MultiplayerPage() {
 
           .room-input::placeholder {
             color: #6b7280;
+          }
+
+          @media (max-width: 1024px) {
+            .room-selector {
+              grid-template-columns: 1fr 1fr;
+            }
           }
 
           @media (max-width: 768px) {
@@ -268,11 +445,32 @@ export default function MultiplayerPage() {
 
       <div className="poker-table-container">
         <div className="game-header">
-          <div className="game-code-info">
-            <strong>Game:</strong> <code>{gameId}</code>
-            <button onClick={copyGameCode} className="copy-button">
-              Copy Code
-            </button>
+          <div className="game-info-left">
+            <div className="game-code-info">
+              <strong>Game:</strong> <code>{gameId}</code>
+              <button onClick={copyGameCode} className="copy-button">
+                Copy Code
+              </button>
+            </div>
+            <div className="game-status-info">
+              <strong>Hand:</strong> #{gameState?.handNumber || 0}
+              {gameState?.status === "waiting_for_players" && (
+                <span className="status-badge waiting">Waiting for 2+ players</span>
+              )}
+              {gameState?.status === "dealing" && (
+                <span className="status-badge dealing">Dealing...</span>
+              )}
+              {gameState?.status === "hand_complete" && (
+                <span className="status-badge complete">Hand Complete - Next in 3s</span>
+              )}
+              {gameState?.status !== "waiting_for_players" && 
+               gameState?.status !== "dealing" && 
+               gameState?.status !== "hand_complete" && (
+                <span className="status-badge active">
+                  {gameState?.currentStreet || "Pre-Flop"}
+                </span>
+              )}
+            </div>
           </div>
           <div className="connection-status">
             <strong>Players:</strong> {gameState?.players?.length || 0}/{POKER_TABLE_SEATS}
@@ -289,21 +487,23 @@ export default function MultiplayerPage() {
                   <h3>Community Cards</h3>
                   <div className="cards-display">
                     {gameState.board.map((card, idx) => (
-                      <div key={idx} className="card-item">
-                        {card}
+                      <div key={idx}>
+                        <CardImage card={card} size="large" />
                       </div>
                     ))}
                   </div>
                 </>
               ) : (
-                <div className="empty-board">No cards dealt yet</div>
+                <div className="empty-board">
+                  {gameState?.status === "waiting_for_players" ? "Waiting for players..." : "No cards dealt yet"}
+                </div>
               )}
             </div>
 
             {/* Pot */}
             <div className="pot-display">
               <h4>Pot</h4>
-              <p>${gameState?.pot || 0}</p>
+              <p>£{gameState?.pot || 0}</p>
             </div>
 
             {/* Player Seats */}
@@ -311,13 +511,15 @@ export default function MultiplayerPage() {
               const player = getPlayerAtSeat(index);
               const pos = getSeatPosition(index);
               const isCurrentPlayer = player?.id === playerId;
+              const isDealer = isDealerPosition(index);
+              const isActing = isActingPlayer(player?.id);
 
               return (
                 <div
                   key={index}
                   className={`player-seat seat-${index} ${isCurrentPlayer ? "current-player" : ""} ${
-                    player ? "occupied" : "empty"
-                  }`}
+                    isActing ? "acting-player" : ""
+                  } ${player ? "occupied" : "empty"} ${index === 0 || index === 1 || index === 4 || index === 5 ? "top-seat" : "bottom-seat"}`}
                   style={{
                     left: `${pos.x}%`,
                     top: `${pos.y}%`,
@@ -325,17 +527,22 @@ export default function MultiplayerPage() {
                 >
                   {player ? (
                     <>
+                      {isDealer && <div className="dealer-button">D</div>}
                       <div className="player-info">
                         <div className="player-name">{player.name}</div>
-                        <div className="player-chips">${player.chips}</div>
+                        <div className="player-chips">£{player.chips}</div>
                         {player.folded && <div className="folded-badge">Folded</div>}
+                        {isActing && <div className="acting-badge">Your Turn</div>}
                       </div>
                       {player.cards && player.cards.length > 0 && (
                         <div className="player-cards">
                           {player.cards.map((card, idx) => (
-                            <div key={idx} className="card-item">
-                              {isCurrentPlayer ? card : "?"}
-                            </div>
+                            <CardImage 
+                              key={idx} 
+                              card={card} 
+                              isHidden={gameState?.status !== "hand_complete" && !isCurrentPlayer} 
+                              size="small" 
+                            />
                           ))}
                         </div>
                       )}
@@ -354,46 +561,96 @@ export default function MultiplayerPage() {
 
       {/* Game Controls */}
       <div className="game-controls">
-        <div className="card">
-          <h2>Your Actions</h2>
-          <div className="button-group">
-            <button
-              className="action-button fold"
-              onClick={() => handleAction("fold")}
-            >
-              Fold
-            </button>
-            <button
-              className="action-button check"
-              onClick={() => handleAction("check")}
-            >
-              Check
-            </button>
-            <button
-              className="action-button call"
-              onClick={() => handleAction("call")}
-            >
-              Call
-            </button>
-            <button
-              className="action-button raise"
-              onClick={() => handleAction("raise", currentBet)}
-            >
-              Raise
-            </button>
+        {gameState?.status === "waiting_for_players" ? (
+          <div className="card">
+            <h2>Waiting for Players...</h2>
+            <p>Share your game code with a friend to start playing!</p>
           </div>
-          <div className="bet-controls">
-            <input
-              type="range"
-              min="0"
-              max="500"
-              value={currentBet}
-              onChange={(e) => setCurrentBet(Number(e.target.value))}
-              className="bet-slider"
-            />
-            <p className="bet-display">Bet: ${currentBet}</p>
+        ) : gameState?.status === "hand_complete" ? (
+          <div className="card">
+            <h2>Hand Complete</h2>
+            <div className="hand-result">
+              {gameState?.winningHandName && (
+                <>
+                  <p className="result-title">Winner{gameState?.winners?.length > 1 ? 's' : ''}: {gameState?.winners?.map(wid => {
+                    const winner = gameState?.players?.find(p => p.id === wid);
+                    return winner?.name;
+                  }).join(', ')}</p>
+                  <p className="winning-hand">Winning Hand: <strong>{gameState?.winningHandName}</strong></p>
+                  
+                  {gameState?.handResults && Object.keys(gameState?.handResults).length > 0 && (
+                    <div className="showdown-hands">
+                      {Object.entries(gameState?.handResults).map(([playerId, result]) => {
+                        const player = gameState?.players?.find(p => p.id === playerId);
+                        return (
+                          <div key={playerId} className="showdown-hand">
+                            <strong>{player?.name}:</strong> {result.handName}
+                            <div className="showdown-cards">
+                              {result.cards?.map((card, idx) => (
+                                <CardImage key={idx} card={card} size="small" />
+                              ))}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </>
+              )}
+              <p className="next-hand-text">Next hand starting in 3 seconds...</p>
+            </div>
           </div>
-        </div>
+        ) : (
+          <div className="card">
+            <h2>Your Actions</h2>
+            {!canPlayerAct() && gameState?.status === "active_hand" && (
+              <p style={{ color: "#fca5a5", marginBottom: "1rem" }}>
+                Waiting for {getCurrentActingPlayer()?.name || "player"} to act...
+              </p>
+            )}
+            <div className="button-group">
+              <button
+                className="action-button fold"
+                onClick={() => handleAction("fold")}
+                disabled={gameState?.status !== "active_hand" || !canPlayerAct()}
+              >
+                Fold
+              </button>
+              <button
+                className="action-button check"
+                onClick={() => handleAction("check")}
+                disabled={gameState?.status !== "active_hand" || !canPlayerAct() || !canCheck()}
+              >
+                Check
+              </button>
+              <button
+                className="action-button call"
+                onClick={() => handleAction("call")}
+                disabled={gameState?.status !== "active_hand" || !canPlayerAct()}
+              >
+                Call £{getCallAmount()}
+              </button>
+              <button
+                className="action-button raise"
+                onClick={() => handleAction("raise", currentBet)}
+                disabled={gameState?.status !== "active_hand" || !canPlayerAct()}
+              >
+                Raise
+              </button>
+            </div>
+            <div className="bet-controls">
+              <input
+                type="range"
+                min="0"
+                max="500"
+                value={currentBet}
+                onChange={(e) => setCurrentBet(Number(e.target.value))}
+                className="bet-slider"
+              />
+              <p className="bet-display">Bet: £{currentBet}</p>
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="footer-buttons">
@@ -434,17 +691,27 @@ export default function MultiplayerPage() {
 
         .poker-table-container {
           margin: 2rem 0;
+          padding: 2rem 1rem;
+          overflow: visible;
         }
 
         .game-header {
           display: flex;
           justify-content: space-between;
-          align-items: center;
+          align-items: flex-start;
           margin-bottom: 1.5rem;
           padding: 1rem;
           background: #111827;
           border: 1px solid #334155;
           border-radius: 10px;
+          gap: 1rem;
+        }
+
+        .game-info-left {
+          display: flex;
+          flex-direction: column;
+          gap: 0.75rem;
+          flex: 1;
         }
 
         .game-code-info {
@@ -461,9 +728,56 @@ export default function MultiplayerPage() {
           border-radius: 4px;
         }
 
+        .game-status-info {
+          display: flex;
+          align-items: center;
+          gap: 0.75rem;
+          font-size: 0.9rem;
+          flex-wrap: wrap;
+        }
+
+        .status-badge {
+          display: inline-block;
+          padding: 0.25rem 0.75rem;
+          border-radius: 12px;
+          font-size: 0.8rem;
+          font-weight: bold;
+        }
+
+        .status-badge.waiting {
+          background: #f59e0b;
+          color: #000;
+        }
+
+        .status-badge.dealing {
+          background: #3b82f6;
+          color: white;
+          animation: pulse 1.5s infinite;
+        }
+
+        .status-badge.active {
+          background: #22c55e;
+          color: white;
+        }
+
+        .status-badge.complete {
+          background: #8b5cf6;
+          color: white;
+        }
+
+        @keyframes pulse {
+          0%, 100% {
+            opacity: 1;
+          }
+          50% {
+            opacity: 0.7;
+          }
+        }
+
         .connection-status {
           font-size: 0.9rem;
           color: #9ca3af;
+          white-space: nowrap;
         }
 
         .copy-button {
@@ -488,7 +802,7 @@ export default function MultiplayerPage() {
           background: radial-gradient(circle at center, #1a472a 0%, #0d2818 100%);
           border: 3px solid #78350f;
           border-radius: 20px;
-          overflow: hidden;
+          overflow: visible;
           box-shadow: 0 20px 40px rgba(0, 0, 0, 0.5);
           margin-bottom: 2rem;
         }
@@ -542,12 +856,13 @@ export default function MultiplayerPage() {
 
         .pot-display {
           position: absolute;
-          bottom: 10%;
+          bottom: 3%;
           left: 50%;
           transform: translateX(-50%);
           text-align: center;
           color: #fbbf24;
           font-weight: bold;
+          z-index: 5;
         }
 
         .pot-display h4 {
@@ -564,10 +879,23 @@ export default function MultiplayerPage() {
         .player-seat {
           position: absolute;
           transform: translate(-50%, -50%);
-          width: 120px;
+          width: 140px;
           text-align: center;
           z-index: 10;
           transition: all 0.2s ease;
+          display: flex;
+          flex-direction: column;
+          overflow: visible;
+          min-height: 180px;
+          justify-content: flex-start;
+        }
+
+        .player-seat.top-seat {
+          flex-direction: column-reverse;
+        }
+
+        .player-seat.bottom-seat {
+          flex-direction: column;
         }
 
         .player-seat.occupied {
@@ -592,6 +920,7 @@ export default function MultiplayerPage() {
 
         .player-info {
           margin-bottom: 0.5rem;
+          line-height: 1.2;
         }
 
         .player-name {
@@ -604,7 +933,8 @@ export default function MultiplayerPage() {
         .player-chips {
           color: #34d399;
           font-weight: bold;
-          font-size: 0.85rem;
+          font-size: 0.9rem;
+          margin: 0.25rem 0;
         }
 
         .folded-badge {
@@ -613,11 +943,37 @@ export default function MultiplayerPage() {
           margin-top: 0.25rem;
         }
 
+        .acting-badge {
+          background: #3b82f6;
+          color: white;
+          font-size: 0.75rem;
+          padding: 0.25rem 0.5rem;
+          border-radius: 4px;
+          margin-top: 0.25rem;
+          font-weight: bold;
+        }
+
         .player-cards {
           display: flex;
-          gap: 0.25rem;
+          gap: 0.5rem;
           justify-content: center;
-          margin-top: 0.5rem;
+          margin-top: 0.75rem;
+          z-index: 25;
+          position: relative;
+          flex-wrap: wrap;
+        }
+
+        .card-placeholder {
+          background: #334155;
+          border: 2px solid #64748b;
+          border-radius: 4px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-weight: bold;
+          font-size: 0.9rem;
+          color: #e0e7ff;
+          box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
         }
 
         .player-cards .card-item {
@@ -655,6 +1011,15 @@ export default function MultiplayerPage() {
           font-size: 1rem;
         }
 
+        .action-button:disabled {
+          opacity: 0.5;
+          cursor: not-allowed;
+        }
+
+        .action-button:disabled:hover {
+          transform: none;
+        }
+
         .action-button.fold {
           background: #ef4444;
           color: white;
@@ -669,8 +1034,13 @@ export default function MultiplayerPage() {
           color: white;
         }
 
-        .action-button.check:hover {
+        .action-button.check:hover:not(:disabled) {
           background: #4b5563;
+        }
+
+        .action-button.check:disabled {
+          background: #9ca3af;
+          opacity: 0.6;
         }
 
         .action-button.call {
@@ -739,6 +1109,63 @@ export default function MultiplayerPage() {
 
         .back-link:hover {
           color: #fbbf24;
+        }
+
+        .hand-result {
+          text-align: center;
+        }
+
+        .result-title {
+          font-size: 1.25rem;
+          font-weight: bold;
+          color: #fbbf24;
+          margin: 0.5rem 0;
+        }
+
+        .winning-hand {
+          font-size: 1rem;
+          color: #34d399;
+          margin: 0.5rem 0;
+        }
+
+        .next-hand-text {
+          color: #9ca3af;
+          margin: 1rem 0 0 0;
+          font-size: 0.9rem;
+        }
+
+        .showdown-hands {
+          background: rgba(31, 41, 55, 0.5);
+          border: 1px solid #334155;
+          border-radius: 8px;
+          padding: 1rem;
+          margin: 1rem 0;
+          max-height: 200px;
+          overflow-y: auto;
+        }
+
+        .showdown-hand {
+          padding: 0.75rem;
+          border-bottom: 1px solid #334155;
+          margin-bottom: 0.75rem;
+        }
+
+        .showdown-hand:last-child {
+          border-bottom: none;
+          margin-bottom: 0;
+        }
+
+        .showdown-hand strong {
+          color: #e5e7eb;
+          display: block;
+          margin-bottom: 0.5rem;
+        }
+
+        .showdown-cards {
+          display: flex;
+          gap: 0.5rem;
+          justify-content: center;
+          flex-wrap: wrap;
         }
 
         @media (max-width: 768px) {
